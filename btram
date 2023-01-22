@@ -1,0 +1,294 @@
+#!/usr/bin/env perl
+
+use utf8;
+use strict;
+use warnings;
+
+use Getopt::Lucid qw( :all );
+use IPC::Run qw(run);
+
+my @options_spec = (
+	Switch(    '--run|-r')->doc('Actually perform [re]mount operations' ),
+	Switch('--verbose|-v')->doc('Print analysis details'                ),
+	Switch(   '--help|-h')->doc('Print usage (this)'                    ),
+);
+
+my $options = Getopt::Lucid->getopt(\@options_spec, {strict => 1})->validate();
+
+usage() and exit(0) if $options->get_help;
+
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
+
+my $mode_run     = $options->get_run();
+my $mode_verbose = $options->get_verbose();
+
+my $config = &get_config('/etc/btram.conf');
+
+our (%bd2root, %root2bd); # Map between device nodes and root-subvol mounts
+
+open my $h, '-|', 'mount' or die;
+
+# TODO check that mount points corresponding to config items have snapshots mounted that conform to config's pattern
+
+while (<$h>)
+{
+	next unless my $m = &parse_mount($_);
+
+	next unless $m->{fstype} eq 'btrfs'; # We don't care about non-btrfs mounts
+
+	my ($blkdev, $mount) = ($m->{blkdev}, $m->{mount});
+
+	my $svNew = &process_mount($blkdev, $mount, $m->{options}->{subvol});
+	&mount($mount, $blkdev, $svNew, 1) if $svNew;
+}
+
+close $h;
+
+while (my ($mount, $cfg) = each (%$config))
+{
+	next if $cfg->{done};
+
+	print "Mount: $mount\n";
+
+	# We must have previously processed the root-subvol mount line for this block device (TODO make order-independent)
+	my $rootMount = $cfg->{root};
+	die unless defined $rootMount;
+
+	# we need to do a value->key lookup on %rootMounts to get blkdev from $rootMount
+	my $svNew = &find_latest($rootMount, $cfg->{dir}, $cfg->{prefix});
+
+	warn "Warning: '$mount' has no snapshots '$cfg->{dir}/$cfg->{prefix}.*'\n" unless defined $svNew;
+
+	&mount($mount, $root2bd{$rootMount}, $svNew, 0);
+}
+
+exit 0;
+
+################################################################################
+
+sub usage
+{
+  print "BTRam v1.0, copyright © 2023 Luxagen\n\n";
+
+  print $options->usage();
+
+  print <<EOF
+
+https://github.com/luxagen/btram
+
+EOF
+}
+
+sub get_config
+{
+	my ($file) = @_;
+
+	my %result;
+
+	open my $h, '<', $file or die;
+
+	while (<$h>)
+	{
+		die 'Bad config!' unless /^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/;
+		die 'Bad config!' unless  $1 and $2 and $3 and $4;
+
+		die 'Bad config!' unless -e -d $1;
+		die 'Bad config!' unless -e -d $2;
+		die 'Bad config!' unless -e -d "$2/$3";
+
+		$result{$1}->{root  } = $2;
+		$result{$1}->{dir   } = $3;
+		$result{$1}->{prefix} = $4;
+	}
+
+	close $h;
+
+	return \%result;
+}
+
+sub parse_mount
+{
+	return undef unless /^([^\s]+)\s+on\s+([^\s]+)\s+type\s+(.+)\s+\((.+)\)$/;
+
+	my $result =
+	{
+		blkdev => $1,
+		mount => $2,
+		fstype => $3,
+		options => {},
+		done => 0,
+	};
+
+	for (split(/,/, $4))
+	{
+		next unless /^([^=]+)(?:=(.+))?$/;
+
+		$result->{options}->{$1} = $2;
+	}
+
+	return $result;
+}
+
+sub sv_info
+{
+	my ($rootMount, $sv) = @_;
+
+	# TODO list invocation!
+	open my $h, '-|', "btrfs subvolume show '$rootMount/$sv'" or die;
+
+	my $header = <$h>;
+	die unless   defined $header  and  $header eq "$sv\n";
+
+	my %r=();
+
+	while (<$h>)
+	{
+		last if /^\s*Snapshot\(s\):/; # Stop when the snapshot list starts
+		die unless /^\s*([^:]*):\s*(.+)$/;
+		$r{$1} = $2;
+	}
+
+	close $h;
+
+	return \%r;
+}
+
+sub sv_impure
+{
+	my ($svi) = @_;
+
+	return 'RW' if $svi->{'Flags'} ne 'readonly';
+	return undef if $svi->{'Received UUID'} ne '-';
+	return 'modified' if $svi->{'Generation'} ne $svi->{'Gen at creation'};
+}
+
+sub find_latest
+{
+	my ($rootMount, $ssdir, $ssnPrefix) = @_;
+
+	die unless $ssnPrefix;
+
+	# See whether there's a newer snapshot
+	my $ssn;
+	while ($_ = glob("$rootMount/$ssdir/$ssnPrefix.*"))
+	{
+		die unless /^\Q$rootMount\/$ssdir\/$ssnPrefix.\E(\d+(?:_\d+)?)$/;
+
+		my $ssnCandidate = "$ssnPrefix.$1";
+
+		if (my $status = &sv_impure(&sv_info($rootMount, "$ssdir/$ssnCandidate")))
+		{
+			warn "Warning: ignoring $status subvol '$ssdir/$ssnCandidate\n";
+			next;
+		}
+
+		$ssn = $ssnCandidate if   (not defined $ssn)  or  $ssnCandidate gt $ssn;
+	}
+
+	return "$ssdir/$ssn" if defined $ssn;
+}
+
+sub process_mount
+{
+	my ($blkdev, $mount, $sv) = @_;
+
+	die unless defined $blkdev and defined $mount;
+
+	if (defined $sv)
+	{
+		# Special handling for root-subvol mounts
+		if ($sv eq '/')
+		{
+			$bd2root{$blkdev} = $mount;
+			$root2bd{$mount} = $blkdev;
+			return;
+		}
+
+		die "Bad subvol path: '$sv'\n" unless $sv =~ /^\/(.*)$/;
+		$sv = $1;
+	}
+
+	# We must have previously processed the root-subvol mount line for this block device (TODO make order-independent)
+	my $rootMount = $bd2root{$blkdev};
+	unless (defined $rootMount)
+	{
+		warn "Warning: $blkdev has a subvol at '$mount', but its root subvol is not mounted\n";
+		return;
+	}
+
+	my $cfg = $config->{$mount};
+	$cfg->{done} = 1;
+
+	warn "Warning: mount '$mount' is not mentioned in config\n" unless defined $cfg;
+
+	unless (defined $sv)
+	{
+		warn "Warning: mount '$mount' has no subvol; was it deleted?\n";
+
+		return unless defined $cfg;
+
+		my ($ssdir, $ssPrefix) = ($cfg->{dir}, $cfg->{prefix});
+
+		my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
+		return unless   defined $svNew;
+
+		print "'$mount': $rootMount/$svNew replaces <none>\n";
+		return $svNew;
+	}
+
+	if (my $status = &sv_impure(&sv_info($rootMount, $sv)))
+	{
+		print "Mount [skipped - $status]: '$mount' -> $rootMount/$sv\n" if $mode_verbose;
+		return;
+	}
+
+	# Snapshots live at least one directory deep
+	return unless $sv =~ /^(.+)\/([^,\)]+)/;
+	my ($ssdir, $ssnCurr) = ($1, $2);
+
+	# Snapshots are named <prefix> . <number>
+	return unless $ssnCurr =~ /^(.+)\.\d+(?:_\d+)?/;
+	my $ssPrefix = $1;
+
+	my $svMounted = &sv_info($rootMount, $sv);
+
+	print "Mount [candidate]: '$mount' -> '$rootMount/$sv'\n" if $mode_verbose;
+
+	my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
+
+	return unless   defined $svNew  and  $svNew ne $sv;
+
+	print "'$mount': '$rootMount/$svNew' replaces '$rootMount/$sv'\n";
+	return $svNew;
+}
+
+sub mount
+{
+	my ($mount, $blkdev, $sv, $remount) = @_;
+
+	my @uc = ('umount', $mount );
+	my @mc = ( 'mount', '-o', "subvol=$sv", $blkdev, $mount );
+
+	if ($mode_verbose)
+	{
+		warn "> @uc\n" if  $mode_verbose and $remount;
+		warn "> @mc\n" if  $mode_verbose;
+	}
+
+	return undef unless $mode_run;
+
+	if ($remount and system(@uc))
+	{
+		warn "Couldn't unmount '$mount'\n";
+		return 0;
+	}
+
+	if (system(@mc))
+	{
+		warn "Couldn't mount '$mount'!\n";
+		return 0;
+	}
+
+	return 1;
+}
