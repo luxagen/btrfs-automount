@@ -268,7 +268,7 @@ sub mount
 	my ($mount, $blkdev, $sv, $remount) = @_;
 
 	my @uc = ('umount', $mount );
-	my @mc = ( 'mount', '-o', "subvol=$sv", $blkdev, $mount );
+	my @mc = ( 'mount', '-o', "ro,subvol=$sv", $blkdev, $mount );
 
 	if ($mode_verbose)
 	{
