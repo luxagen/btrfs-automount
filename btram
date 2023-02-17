@@ -49,7 +49,7 @@ while (my ($mount, $cfg) = each (%$config))
 {
 	next if $cfg->{done};
 
-	print "Mount: $mount\n";
+	print "Mount [fresh]: $mount\n";
 
 	# We must have previously processed the root-subvol mount line for this block device (TODO make order-independent)
 	my $rootMount = $cfg->{root};
