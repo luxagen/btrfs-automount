@@ -86,10 +86,12 @@ sub get_config
 
 	my %result;
 
-	open my $h, '<', $file or die;
+	open my $h, '<', $file or die "Missing/inaccessible config; nothing to do\n";
 
 	while (<$h>)
 	{
+		next if /^\n$/;
+
 		die 'Bad config!' unless /^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/;
 		die 'Bad config!' unless  $1 and $2 and $3 and $4;
 
