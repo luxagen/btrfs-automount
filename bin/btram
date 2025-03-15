@@ -9,21 +9,21 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Check if we're running from the source directory
-if [ -f "$PROJECT_ROOT/target/release/btram" ]; then
+if [ -f "$PROJECT_ROOT/target/release/btram-bin" ]; then
     # Use the release build if available
-    exec "$PROJECT_ROOT/target/release/btram" "$@"
-elif [ -f "$PROJECT_ROOT/target/debug/btram" ]; then
+    exec "$PROJECT_ROOT/target/release/btram-bin" "$@"
+elif [ -f "$PROJECT_ROOT/target/debug/btram-bin" ]; then
     # Fall back to debug build if release isn't available
-    exec "$PROJECT_ROOT/target/debug/btram" "$@"
+    exec "$PROJECT_ROOT/target/debug/btram-bin" "$@"
 else
     # If neither build is available, try to build the project
     echo "BTRam executable not found. Attempting to build it..."
     
     # Check if cargo is available
     if command -v cargo >/dev/null 2>&1; then
-        cd "$PROJECT_ROOT" && cargo build --release
-        if [ -f "$PROJECT_ROOT/target/release/btram" ]; then
-            exec "$PROJECT_ROOT/target/release/btram" "$@"
+        cargo build --release --manifest-path="$PROJECT_ROOT/Cargo.toml"
+        if [ -f "$PROJECT_ROOT/target/release/btram-bin" ]; then
+            exec "$PROJECT_ROOT/target/release/btram-bin" "$@"
         else
             echo "Failed to build BTRam. Please run 'cargo build --release' manually."
             exit 1

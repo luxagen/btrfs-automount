@@ -7,6 +7,10 @@ authors = ["Luxagen <btram@luxagen.com>"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/luxagen/btram"
 
+[[bin]]
+name = "btram-bin"
+path = "src/bin/btram.rs"
+
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
