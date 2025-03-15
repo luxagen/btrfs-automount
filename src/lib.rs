@@ -108,19 +108,17 @@ pub fn run() -> Result<()> {
                 )? {
                     mount_subvol(&mount, &blkdev, &sv_new, true, opts.verbose, opts.run)?;
                 }
-            } else {
-                if let Some(sv_new) = process_mount(
-                    &blkdev,
-                    &mount,
-                    None,
-                    &mut bd2root,
-                    &mut root2bd,
-                    &mut config_mut,
-                    opts.verbose,
-                    opts.run,
-                )? {
-                    mount_subvol(&mount, &blkdev, &sv_new, true, opts.verbose, opts.run)?;
-                }
+            } else if let Some(sv_new) = process_mount(
+                &blkdev,
+                &mount,
+                None,
+                &mut bd2root,
+                &mut root2bd,
+                &mut config_mut,
+                opts.verbose,
+                opts.run,
+            )? {
+                mount_subvol(&mount, &blkdev, &sv_new, true, opts.verbose, opts.run)?;
             }
         }
     }
@@ -266,9 +264,9 @@ pub fn sv_info(root_mount: &str, sv: &str) -> Result<SubvolInfo> {
     let lines: Vec<&str> = output_str.lines().collect();
 
     if lines.is_empty() || lines[0] != sv {
-        return Err(BtramError::CommandFailed(format!(
-            "Unexpected output from btrfs subvolume show"
-        ))
+        return Err(BtramError::CommandFailed(
+            "Unexpected output from btrfs subvolume show".to_string(),
+        )
         .into());
     }
 
@@ -379,8 +377,8 @@ pub fn process_mount(
         }
 
         // Strip leading slash from subvol path
-        let sv = if sv.starts_with('/') {
-            &sv[1..]
+        let sv = if let Some(stripped) = sv.strip_prefix('/') {
+            stripped
         } else {
             return Err(BtramError::BadSubvolPath(sv.to_string()).into());
         };
@@ -476,9 +474,9 @@ pub fn mount_subvol(
     verbose: bool,
     run_mode: bool,
 ) -> Result<bool> {
-    let umount_cmd = vec!["umount", mount];
+    let umount_cmd = ["umount", mount];
     let subvol_option = format!("ro,subvol={}", sv);
-    let mount_cmd = vec!["mount", "-o", &subvol_option, blkdev, mount];
+    let mount_cmd = ["mount", "-o", &subvol_option, blkdev, mount];
 
     if verbose {
         if remount {
