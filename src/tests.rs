@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs::File;
+    use crate::*;
+    use std::fs;
     use std::io::Write;
     use tempfile::tempdir;
     
