@@ -7,9 +7,8 @@ authors = ["Luxagen <btram@luxagen.com>"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/luxagen/btram"
 
-[[bin]]
-name = "btram-bin"
-path = "src/bin/btram.rs"
+# The binary will use src/main.rs by default
+# No need for explicit [[bin]] section for the default binary
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
