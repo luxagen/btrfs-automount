@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
 use regex::Regex;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use thiserror::Error;
 
