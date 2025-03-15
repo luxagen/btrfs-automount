@@ -1,4 +1,4 @@
-﻿# BTRam: BTRFS auto-mounter
+# BTRam: BTRFS auto-mounter
 
 ## What is it?
 
@@ -8,7 +8,7 @@
 
 ## What does it do?
 
-`btram` mounts the latest snapshot of each nominated dataset into a given location via a [BTRFS](http://en.wikipedia.org/wiki/Btrfs) subvolume mount, and can automatically remount the latest snapshot each time it's run. For example, if you use `btrbk` to incremental-send updated snapshots each night, invoking `btram -r` will remount the newest snapshot. Because it inspects BTRFS subvolumes and uses [`mount`](http://linux.die.net/man/8/mount), it must be run as ```root```.
+`btram` mounts the latest snapshot of each nominated dataset into a given location via a [BTRFS](http://en.wikipedia.org/wiki/Btrfs) subvolume mount, and can automatically remount the latest snapshot each time it's run. For example, if you use `btrbk` to incremental-send updated snapshots each night, invoking `btram -r` will remount the newest snapshot. Because it inspects BTRFS subvolumes and uses [`mount`](http://linux.die.net/man/8/mount), it must be run as `root`.
 
 ## Where can I use it?
 
@@ -18,26 +18,27 @@ It should work on any [*NIX](http://en.wikipedia.org/wiki/Unix-like) system that
 
 ## License
 
-`btram` is released under a "[GPL3](http://www.gnu.org/licenses/gpl-3.0.en.html) or later" licence and, despite my best efforts to make it obviously defect-free, comes with absolutely no warranty whatsoever, express or implied; use it at your own risk. Feel free to log [issues](http://github.com/luxagen/btram/issues) for bug reports and suggestions, submit a pull request with a fix of your own, or e-mail me at btram@luxagen.com .
+`btram` is released under a "[GPL3](http://www.gnu.org/licenses/gpl-3.0.en.html) or later" licence and, despite my best efforts to make it obviously defect-free, comes with absolutely no warranty whatsoever, express or implied; use it at your own risk. Feel free to log [issues](http://github.com/luxagen/btram/issues) for bug reports and suggestions, submit a pull request with a fix of your own, or e-mail me at btram@luxagen.com.
 
 ## Installation
 
-1. Install Perl.
-2. Clone or download this repository.
-3. Install the dependencies:
+### From Source
 
-	Ubuntu:
-	```
-	sudo apt install libipc-run-perl libgetopt-lucid-perl
-	```
-	CPAN:
-	```
-	cpan -I IPC::Run Getopt::Lucid
-	```
+1. Install Rust and Cargo (https://www.rust-lang.org/tools/install)
+2. Clone or download this repository
+3. Build the project:
+   ```
+   cargo build --release
+   ```
+4. The binary will be available at `target/release/btram`
 
-### Add to PATH (optional)
+### Adding to PATH (optional)
 
-To facilitate addition to your `$PATH`, a `bin/` directory is provided with a convenience symlink.
+To facilitate addition to your `$PATH`, you can copy or symlink the binary to a directory in your PATH:
+
+```
+sudo cp target/release/btram /usr/local/bin/
+```
 
 ## Configuration
 
@@ -61,4 +62,20 @@ To facilitate addition to your `$PATH`, a `bin/` directory is provided with a co
 btram -h
 ```
 
-...will tell you how to use the tool. Note that it won't actually do any [re]mounting unless you invoke it with the ```-r``` option. A ```--verbose``` option exists that will print more diagnostic information, including the commands that `btram -r` will run.
+...will tell you how to use the tool. Note that it won't actually do any [re]mounting unless you invoke it with the `-r` option. A `--verbose` option exists that will print more diagnostic information, including the commands that `btram -r` will run.
+
+## Development
+
+### Running Tests
+
+```
+cargo test
+```
+
+### Building in Debug Mode
+
+```
+cargo build
+```
+
+The debug binary will be available at `target/debug/btram`
