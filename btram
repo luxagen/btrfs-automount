@@ -91,13 +91,15 @@ sub get_config
 	while (<$h>)
 	{
 		next if /^\n$/;
+		next if /^\s*#/;
 
-		die 'Bad config!' unless /^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/;
-		die 'Bad config!' unless  $1 and $2 and $3 and $4;
 
-		die 'Bad config!' unless -e -d $1;
-		die 'Bad config!' unless -e -d $2;
-		die 'Bad config!' unless -e -d "$2/$3";
+		die "Error: config line is malformed\n" unless /^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/;
+		die "Error: config line is missing field(s)\n" unless  $1 and $2 and $3 and $4;
+
+		die "Error: subvol mount point '$1' missing\n" unless -e -d $1;
+		die "Error: volume mount point '$2' missing\n" unless -e -d $2;
+		die "Error: snapshot directory '$2/$3' missing\n" unless -e -d "$2/$3";
 
 		$result{$1}->{root  } = $2;
 		$result{$1}->{dir   } = $3;
