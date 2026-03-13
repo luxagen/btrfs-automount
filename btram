@@ -37,75 +37,49 @@ open my $h, '-|', 'mount' or die;
 
 # TODO check that mount points corresponding to config items have snapshots mounted that conform to config's pattern
 
-my @mounts;
-my @btrfs_mounts;
+my $mount_tree = &mt_new('/', '/');
 
 while (<$h>)
 {
 	next unless my $m = &parse_mount($_);
-
-	push @mounts, $m;
-	push @btrfs_mounts, $m if $m->{fstype} eq 'btrfs';
+	&mt_insert($mount_tree, $m->{mount}, $m);
 }
 
 close $h;
 
-$_->{children} = [] for @mounts;
+&mt_walk($mount_tree, sub {
+	my ($n) = @_;
+	my $m = $n->{oldMount};
+	return unless defined $m and $m->{fstype} eq 'btrfs';
 
-my %mount_by_path;
-for my $m (@mounts)
-{
-	$mount_by_path{$m->{mount}} = $m;
-}
-
-for my $m (@mounts)
-{
-	my $path = $m->{mount};
-
-	next if $path eq '/';
-
-	while (1)
-	{
-		$path =~ s{/[^/]+$}{};
-		$path = '/' if $path eq '';
-		last if $path eq $m->{mount};
-
-		my $pm = $mount_by_path{$path};
-		if (defined $pm)
-		{
-			$m->{parent} = $pm;
-			push @{$pm->{children}}, $m;
-			last;
-		}
-
-		last if $path eq '/';
-	}
-}
-
-for my $m (@btrfs_mounts)
-{
-	my ($blkdev, $mount, $sv) = ($m->{blkdev}, $m->{mount}, $m->{options}->{subvol});
+	my ($blkdev, $mount, $sv) = ($m->{blkdev}, $m->{mount}, $n->{oldSubvol});
 
 	if (defined $sv)
 	{
-		next unless $sv eq '/';
+		return unless $sv eq '/';
 	}
 	else
 	{
-		next unless $is_root_mount{$mount};
+		return unless $is_root_mount{$mount};
 	}
 
 	$bd2root{$blkdev} = $mount;
 	$root2bd{$mount} = $blkdev;
-}
+});
 
-for my $m (@btrfs_mounts)
-{
+&mt_walk($mount_tree, sub {
+	my ($n) = @_;
+	my $m = $n->{oldMount};
+	return unless defined $m and $m->{fstype} eq 'btrfs';
+
 	my ($blkdev, $mount) = ($m->{blkdev}, $m->{mount});
-
-	my $svNew = &process_mount($blkdev, $mount, $m->{options}->{subvol});
-	&mount($mount, $blkdev, $svNew, 1) if $svNew;
-}
+	my $svNew = &process_mount($blkdev, $mount, $n->{oldSubvol});
+	if ($svNew)
+	{
+		$n->{newSubvol} = $svNew;
+		&mount($mount, $blkdev, $svNew, 1);
+	}
+});
 
 while (my ($mount, $cfg) = each (%$config))
 {
@@ -194,6 +168,61 @@ sub parse_mount
 	}
 
 	return $result;
+}
+
+sub mt_new
+{
+	my ($name, $path) = @_;
+
+	return
+	{
+		name => $name,
+		path => $path,
+		children => {},
+	};
+}
+
+sub mt_insert
+{
+	my ($root, $path, $m) = @_;
+
+	die unless defined $root and defined $path and defined $m;
+
+	my @parts = grep { $_ ne '' } split(m{/+}, $path);
+
+	my $n = $root;
+	my $p = '';
+ 
+	for my $part (@parts)
+	{
+		$p .= "/$part";
+
+		my $c = $n->{children}->{$part};
+		unless (defined $c)
+		{
+			$c = &mt_new($part, $p);
+			$n->{children}->{$part} = $c;
+		}
+
+		$n = $c;
+	}
+
+	die "Duplicate mount point '$path'\n" if defined $n->{oldMount};
+
+	$n->{oldMount} = $m;
+	$n->{oldSubvol} = $m->{options}->{subvol};
+}
+
+sub mt_walk
+{
+	my ($n, $cb) = @_;
+
+	$cb->($n);
+
+	for my $c (values %{$n->{children}})
+	{
+		&mt_walk($c, $cb);
+	}
 }
 
 sub sv_info
