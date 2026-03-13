@@ -25,6 +25,12 @@ my $mode_verbose = $options->get_verbose();
 
 my $config = &get_config('/etc/btram.conf');
 
+my %is_root_mount;
+for my $m (keys %$config)
+{
+	$is_root_mount{$config->{$m}->{root}} = 1;
+}
+
 our (%bd2root, %root2bd); # Map between device nodes and root-subvol mounts
 
 open my $h, '-|', 'mount' or die;
@@ -198,6 +204,13 @@ sub process_mount
 	my ($blkdev, $mount, $sv) = @_;
 
 	die unless defined $blkdev and defined $mount;
+
+	if (not defined $sv and $is_root_mount{$mount})
+	{
+		$bd2root{$blkdev} = $mount;
+		$root2bd{$mount} = $blkdev;
+		return;
+	}
 
 	if (defined $sv)
 	{
