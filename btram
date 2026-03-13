@@ -23,6 +23,8 @@ STDERR->autoflush(1);
 my $mode_run     = $options->get_run();
 my $mode_verbose = $options->get_verbose();
 
+my @ignore_mount_prefixes = qw(/proc /sys /sysfs /var);
+
 my $config = &get_config('/etc/btram.conf');
 
 my %is_root_mount;
@@ -42,6 +44,7 @@ my $mount_tree = &mt_new('/', '/');
 while (<$h>)
 {
 	next unless my $m = &parse_mount($_);
+	next if &is_ignored_mount_path($m->{mount});
 	&mt_insert($mount_tree, $m->{mount}, $m);
 }
 
@@ -140,6 +143,9 @@ sub get_config
 		$result{$1}->{root  } = $2;
 		$result{$1}->{dir   } = $3;
 		$result{$1}->{prefix} = $4;
+
+		die "Error: subvol mount point '$1' is under an ignored mount tree\n" if &is_ignored_mount_path($1);
+		die "Error: volume mount point '$2' is under an ignored mount tree\n" if &is_ignored_mount_path($2);
 	}
 
 	close $h;
@@ -222,6 +228,19 @@ sub mt_walk
 	for my $c (values %{$n->{children}})
 	{
 		&mt_walk($c, $cb);
+	}
+}
+
+sub is_ignored_mount_path
+{
+	my ($path) = @_;
+
+	return undef unless defined $path;
+
+	for my $p (@ignore_mount_prefixes)
+	{
+		return 1 if $path eq $p;
+		return 1 if $path =~ /^\Q$p\E\//;
 	}
 }
 
