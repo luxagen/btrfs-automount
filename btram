@@ -37,19 +37,43 @@ open my $h, '-|', 'mount' or die;
 
 # TODO check that mount points corresponding to config items have snapshots mounted that conform to config's pattern
 
+my @mounts;
+
 while (<$h>)
 {
 	next unless my $m = &parse_mount($_);
 
 	next unless $m->{fstype} eq 'btrfs'; # We don't care about non-btrfs mounts
 
+	push @mounts, $m;
+}
+
+close $h;
+
+for my $m (@mounts)
+{
+	my ($blkdev, $mount, $sv) = ($m->{blkdev}, $m->{mount}, $m->{options}->{subvol});
+
+	if (defined $sv)
+	{
+		next unless $sv eq '/';
+	}
+	else
+	{
+		next unless $is_root_mount{$mount};
+	}
+
+	$bd2root{$blkdev} = $mount;
+	$root2bd{$mount} = $blkdev;
+}
+
+for my $m (@mounts)
+{
 	my ($blkdev, $mount) = ($m->{blkdev}, $m->{mount});
 
 	my $svNew = &process_mount($blkdev, $mount, $m->{options}->{subvol});
 	&mount($mount, $blkdev, $svNew, 1) if $svNew;
 }
-
-close $h;
 
 while (my ($mount, $cfg) = each (%$config))
 {
