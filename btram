@@ -371,27 +371,13 @@ sub do_transaction
 
 	my $rm = $r->{oldMount};
 
-	my @desc;
-	&mt_collect_desc_mounts($r, \@desc);
-
-	for my $d (@desc)
+	if (&tx_has_bind_descendant($r))
 	{
-		my $m = $d->{oldMount};
-		next unless defined $m;
-		if ($m->{is_bind})
-		{
-			warn "Error: bind mount at '$m->{mount}' blocks remount transaction for '$r->{path}'\n";
-			return 0;
-		}
+		warn "Error: bind mount blocks remount transaction for '$r->{path}'\n";
+		return 0;
 	}
 
-	@desc = sort { length($b->{path}) <=> length($a->{path}) } @desc;
-
-	for my $d (@desc)
-	{
-		next unless defined $d->{oldMount};
-		return 0 unless &do_umount($d->{oldMount}->{mount});
-	}
+	return 0 unless &tx_umount_descendants($r);
 
 	my $swap_ok = 1;
 	if (defined $rm)
@@ -423,27 +409,61 @@ sub do_transaction
 		}
 	}
 
-	my @restore = sort { length($a->{path}) <=> length($b->{path}) } @desc;
-	for my $d (@restore)
-	{
-		my $m = $d->{oldMount};
-		next unless defined $m;
 
+	&tx_restore_descendants($r);
+
+	return $swap_ok;
+}
+
+sub tx_has_bind_descendant
+{
+	my ($n) = @_;
+
+	for my $c (values %{$n->{children}})
+	{
+		my $m = $c->{oldMount};
+		return 1 if defined $m and $m->{is_bind};
+		return 1 if &tx_has_bind_descendant($c);
+	}
+}
+
+sub tx_umount_descendants
+{
+	my ($n) = @_;
+
+	for my $c (values %{$n->{children}})
+	{
+		return 0 unless &tx_umount_descendants($c);
+	}
+
+	my $m = $n->{oldMount};
+	return 1 unless defined $m;
+
+	return &do_umount($m->{mount});
+}
+
+sub tx_restore_descendants
+{
+	my ($n) = @_;
+
+	my $m = $n->{oldMount};
+	if (defined $m)
+	{
 		unless (-e -d $m->{mount})
 		{
 			warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
-			next;
+			return;
 		}
 
 		if ($m->{is_bind})
 		{
 			warn "Error: not restoring bind mount '$m->{mount}'\n";
-			next;
+			return;
 		}
 
-		if ($m->{fstype} eq 'btrfs' and defined $d->{newSubvol} and defined $d->{oldSubvol} and $d->{newSubvol} ne $d->{oldSubvol})
+		if ($m->{fstype} eq 'btrfs' and defined $n->{newSubvol} and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol})
 		{
-			&mount_btrfs($m->{mount}, $m->{blkdev}, $d->{newSubvol}, $m->{options}, 0);
+			&mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
 		}
 		else
 		{
@@ -451,7 +471,10 @@ sub do_transaction
 		}
 	}
 
-	return $swap_ok;
+	for my $c (values %{$n->{children}})
+	{
+		&tx_restore_descendants($c);
+	}
 }
 
 sub mt_collect_desc_mounts
