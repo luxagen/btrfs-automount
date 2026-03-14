@@ -35,7 +35,7 @@ for my $m (keys %$config)
 
 our (%bd2root, %root2bd); # Map between device nodes and root-subvol mounts
 
-open my $h, '-|', 'mount' or die;
+open my $h, '<', '/proc/self/mountinfo' or die;
 
 # TODO check that mount points corresponding to config items have snapshots mounted that conform to config's pattern
 
@@ -43,7 +43,7 @@ my $mount_tree = &mt_new('/', '/');
 
 while (<$h>)
 {
-	next unless my $m = &parse_mount($_);
+	next unless my $m = &parse_mountinfo($_);
 	next if &is_ignored_mount_path($m->{mount});
 	&mt_insert($mount_tree, $m->{mount}, $m);
 }
@@ -59,7 +59,7 @@ close $h;
 
 	if (defined $sv)
 	{
-		return unless $sv eq '/';
+		return unless $sv eq '';
 	}
 	else
 	{
@@ -176,6 +176,73 @@ sub parse_mount
 	return $result;
 }
 
+sub parse_mountinfo
+{
+	my ($line) = @_;
+
+	chomp $line;
+
+	my ($left, $right) = split(/\s-\s/, $line, 2);
+	return undef unless defined $right;
+
+	my @l = split(/\s+/, $left);
+	return undef unless @l >= 6;
+
+	my ($root, $mount, $opts) = @l[3,4,5];
+	$root  = &unescape_mountinfo($root);
+	$mount = &unescape_mountinfo($mount);
+
+	my @r = split(/\s+/, $right, 3);
+	return undef unless @r == 3;
+	my ($fstype, $source, $superopts) = @r;
+	$source = &unescape_mountinfo($source);
+
+	my $result =
+	{
+		blkdev => $source,
+		mount => $mount,
+		fstype => $fstype,
+		options => {},
+		mnt_opts => {},
+		super_opts => {},
+		root => $root,
+		is_bind => 0,
+		done => 0,
+	};
+
+	&parse_mount_opts($result->{mnt_opts}, $opts);
+	&parse_mount_opts($result->{super_opts}, $superopts);
+
+	%{$result->{options}} = (%{$result->{mnt_opts}}, %{$result->{super_opts}});
+
+	$result->{is_bind} = 1 if exists $result->{mnt_opts}->{bind} or exists $result->{mnt_opts}->{rbind};
+
+	return $result;
+}
+
+sub parse_mount_opts
+{
+	my ($out, $s) = @_;
+
+	return unless defined $out and defined $s;
+
+	for (split(/,/, $s))
+	{
+		next unless /^([^=]+)(?:=(.+))?$/;
+		$out->{$1} = $2;
+	}
+}
+
+sub unescape_mountinfo
+{
+	my ($s) = @_;
+
+	return undef unless defined $s;
+
+	$s =~ s/\\([0-7]{3})/chr(oct($1))/ge;
+	return $s;
+}
+
 sub mt_new
 {
 	my ($name, $path) = @_;
@@ -216,7 +283,11 @@ sub mt_insert
 	die "Duplicate mount point '$path'\n" if defined $n->{oldMount};
 
 	$n->{oldMount} = $m;
-	$n->{oldSubvol} = $m->{options}->{subvol};
+
+	my $sv = $m->{options}->{subvol};
+	$sv = '' if defined $sv and $sv eq '/';
+	$sv =~ s{^/}{} if defined $sv;
+	$n->{oldSubvol} = $sv;
 }
 
 sub mt_walk
@@ -319,15 +390,14 @@ sub process_mount
 	if (defined $sv)
 	{
 		# Special handling for root-subvol mounts
-		if ($sv eq '/')
+		if ($sv eq '')
 		{
 			$bd2root{$blkdev} = $mount;
 			$root2bd{$mount} = $blkdev;
 			return;
 		}
 
-		die "Bad subvol path: '$sv'\n" unless $sv =~ /^\/(.*)$/;
-		$sv = $1;
+		$sv =~ s{^/}{};
 	}
 
 	# We must have previously processed the root-subvol mount line for this block device (TODO make order-independent)
