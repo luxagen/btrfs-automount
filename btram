@@ -10,6 +10,7 @@ use IPC::Run qw(run);
 my @options_spec = (
 	Switch(    '--run|-r')->doc('Actually perform [re]mount operations' ),
 	Switch('--verbose|-v')->doc('Print analysis details'                ),
+	Switch(  '--force|-f')->doc('Pass -f to umount'                     ),
 	Switch(   '--help|-h')->doc('Print usage (this)'                    ),
 );
 
@@ -22,6 +23,7 @@ STDERR->autoflush(1);
 
 my $mode_run     = $options->get_run();
 my $mode_verbose = $options->get_verbose();
+my $mode_force   = $options->get_force();
 
 my @ignore_mount_prefixes = qw(/proc /sys /sysfs /var);
 
@@ -70,36 +72,47 @@ close $h;
 	$root2bd{$mount} = $blkdev;
 });
 
+for my $mount (keys %$config)
+{
+	my $cfg = $config->{$mount};
+	next unless defined $cfg;
+
+	my $n = &mt_get_node($mount_tree, $mount, 1);
+	$n->{cfg} = $cfg;
+}
+
 &mt_walk($mount_tree, sub {
 	my ($n) = @_;
+	return unless defined $n->{cfg};
+
+	my $cfg = $n->{cfg};
 	my $m = $n->{oldMount};
-	return unless defined $m and $m->{fstype} eq 'btrfs';
 
-	my ($blkdev, $mount) = ($m->{blkdev}, $m->{mount});
-	my $svNew = &process_mount($blkdev, $mount, $n->{oldSubvol});
-	if ($svNew)
-	{
-		$n->{newSubvol} = $svNew;
-		&mount($mount, $blkdev, $svNew, 1);
-	}
-});
-
-while (my ($mount, $cfg) = each (%$config))
-{
-	next if $cfg->{done};
-
-	print "Mount [fresh]: $mount\n";
-
-	# We must have previously processed the root-subvol mount line for this block device (TODO make order-independent)
 	my $rootMount = $cfg->{root};
 	die unless defined $rootMount;
 
-	# we need to do a value->key lookup on %rootMounts to get blkdev from $rootMount
-	my $svNew = &find_latest($rootMount, $cfg->{dir}, $cfg->{prefix});
+	if (defined $m)
+	{
+		return unless $m->{fstype} eq 'btrfs';
 
-	warn "Warning: '$mount' has no snapshots '$cfg->{dir}/$cfg->{prefix}.*'\n" unless defined $svNew;
+		my ($blkdev, $mount, $sv) = ($m->{blkdev}, $m->{mount}, $n->{oldSubvol});
+		my $svNew = &process_mount($blkdev, $mount, $sv);
+		$n->{newSubvol} = $svNew if defined $svNew;
+	}
+	else
+	{
+		my $svNew = &find_latest($rootMount, $cfg->{dir}, $cfg->{prefix});
+		warn "Warning: '$n->{path}' has no snapshots '$cfg->{dir}/$cfg->{prefix}.*'\n" unless defined $svNew;
+		$n->{newSubvol} = $svNew if defined $svNew;
+	}
+});
 
-	&mount($mount, $root2bd{$rootMount}, $svNew, 0);
+my @swap_roots;
+&mt_collect_swap_roots($mount_tree, 0, 0, \@swap_roots);
+
+for my $r (@swap_roots)
+{
+	&do_transaction($r);
 }
 
 exit 0;
@@ -288,6 +301,308 @@ sub mt_insert
 	$sv = '' if defined $sv and $sv eq '/';
 	$sv =~ s{^/}{} if defined $sv;
 	$n->{oldSubvol} = $sv;
+}
+
+sub mt_get_node
+{
+	my ($root, $path, $create) = @_;
+
+	die unless defined $root and defined $path;
+
+	my @parts = grep { $_ ne '' } split(m{/+}, $path);
+
+	my $n = $root;
+	my $p = '';
+
+	for my $part (@parts)
+	{
+		$p .= "/$part";
+		my $c = $n->{children}->{$part};
+		unless (defined $c)
+		{
+			return undef unless $create;
+			$c = &mt_new($part, $p);
+			$n->{children}->{$part} = $c;
+		}
+		$n = $c;
+	}
+
+	return $n;
+}
+
+sub mt_collect_swap_roots
+{
+	my ($n, $ancestor_swap, $bind_ancestor, $out) = @_;
+
+	my $m = $n->{oldMount};
+	my $bind_here = (defined $m and $m->{is_bind}) ? 1 : 0;
+	my $bind = $bind_ancestor || $bind_here;
+
+	my $swap = 0;
+	if (defined $n->{newSubvol})
+	{
+		if (defined $m)
+		{
+			$swap = 1 if $m->{fstype} eq 'btrfs' and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol};
+		}
+		else
+		{
+			$swap = 1;
+		}
+	}
+
+	push @$out, $n if $swap and not $ancestor_swap;
+
+	for my $c (values %{$n->{children}})
+	{
+		&mt_collect_swap_roots($c, ($ancestor_swap || $swap), $bind, $out);
+	}
+}
+
+sub do_transaction
+{
+	my ($r) = @_;
+
+	if (&mt_has_bind_ancestor($mount_tree, $r->{path}))
+	{
+		warn "Error: bind mount blocks remount transaction for '$r->{path}'\n";
+		return 0;
+	}
+
+	my $rm = $r->{oldMount};
+
+	my @desc;
+	&mt_collect_desc_mounts($r, \@desc);
+
+	for my $d (@desc)
+	{
+		my $m = $d->{oldMount};
+		next unless defined $m;
+		if ($m->{is_bind})
+		{
+			warn "Error: bind mount at '$m->{mount}' blocks remount transaction for '$r->{path}'\n";
+			return 0;
+		}
+	}
+
+	@desc = sort { length($b->{path}) <=> length($a->{path}) } @desc;
+
+	for my $d (@desc)
+	{
+		next unless defined $d->{oldMount};
+		return 0 unless &do_umount($d->{oldMount}->{mount});
+	}
+
+	my $swap_ok = 1;
+	if (defined $rm)
+	{
+		my $old = $r->{oldSubvol};
+		my $new = $r->{newSubvol};
+		$swap_ok = &mount_btrfs($rm->{mount}, $rm->{blkdev}, $new, $rm->{options}, 1);
+		unless ($swap_ok)
+		{
+			warn "Error: remount failed for '$rm->{mount}', attempting rollback\n";
+			my $rb = &mount_btrfs($rm->{mount}, $rm->{blkdev}, $old, $rm->{options}, 0);
+			warn "Error: rollback failed for '$rm->{mount}'\n" unless $rb;
+		}
+	}
+	else
+	{
+		my $cfg = $r->{cfg};
+		die unless defined $cfg;
+		my $rootMount = $cfg->{root};
+		my $blkdev = $root2bd{$rootMount};
+		unless (defined $blkdev)
+		{
+			warn "Error: cannot mount '$r->{path}' because root mount '$rootMount' is not known\n";
+			$swap_ok = 0;
+		}
+		else
+		{
+			$swap_ok = &mount_btrfs($r->{path}, $blkdev, $r->{newSubvol}, {ro => undef}, 0);
+		}
+	}
+
+	my @restore = sort { length($a->{path}) <=> length($b->{path}) } @desc;
+	for my $d (@restore)
+	{
+		my $m = $d->{oldMount};
+		next unless defined $m;
+
+		unless (-e -d $m->{mount})
+		{
+			warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
+			next;
+		}
+
+		if ($m->{is_bind})
+		{
+			warn "Error: not restoring bind mount '$m->{mount}'\n";
+			next;
+		}
+
+		if ($m->{fstype} eq 'btrfs' and defined $d->{newSubvol} and defined $d->{oldSubvol} and $d->{newSubvol} ne $d->{oldSubvol})
+		{
+			&mount_btrfs($m->{mount}, $m->{blkdev}, $d->{newSubvol}, $m->{options}, 0);
+		}
+		else
+		{
+			&mount_generic($m);
+		}
+	}
+
+	return $swap_ok;
+}
+
+sub mt_collect_desc_mounts
+{
+	my ($n, $out) = @_;
+
+	for my $c (values %{$n->{children}})
+	{
+		push @$out, $c if defined $c->{oldMount};
+		&mt_collect_desc_mounts($c, $out);
+	}
+}
+
+sub do_umount
+{
+	my ($mount) = @_;
+
+	my @uc = ('umount');
+	push @uc, '-f' if $mode_force;
+	push @uc, $mount;
+
+	warn "> @uc\n" if $mode_verbose;
+
+	return 1 unless $mode_run;
+
+	if (system(@uc))
+	{
+		warn "Couldn't unmount '$mount'\n";
+		return 0;
+	}
+
+	return 1;
+}
+
+sub mt_has_bind_ancestor
+{
+	my ($root, $path) = @_;
+
+	return undef unless defined $root and defined $path;
+
+	my @parts = grep { $_ ne '' } split(m{/+}, $path);
+	my $n = $root;
+
+	if (defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+	{
+		return 1;
+	}
+
+	for my $part (@parts)
+	{
+		my $c = $n->{children}->{$part};
+		last unless defined $c;
+		$n = $c;
+		if (defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+		{
+			return 1;
+		}
+	}
+}
+
+sub mount_btrfs
+{
+	my ($mount, $blkdev, $sv, $opts, $remount) = @_;
+
+	return 0 unless defined $mount and defined $blkdev and defined $sv;
+	return 0 unless -e -d $mount;
+
+	my @uc = ('umount');
+	push @uc, '-f' if $mode_force;
+	push @uc, $mount;
+
+	my %o;
+	%o = %$opts if defined $opts;
+	delete $o{subvol};
+	delete $o{subvolid};
+	delete $o{bind};
+	delete $o{rbind};
+	delete $o{rw};
+	$o{ro} = undef;
+
+	my @optlist;
+	for my $k (keys %o)
+	{
+		push @optlist, defined $o{$k} ? "$k=$o{$k}" : $k;
+	}
+	push @optlist, "subvol=$sv";
+
+	my @mc = ('mount', '-t', 'btrfs', '-o', join(',', @optlist), $blkdev, $mount);
+
+	if ($mode_verbose)
+	{
+		warn "> @uc\n" if $remount;
+		warn "> @mc\n";
+	}
+
+	return 1 unless $mode_run;
+
+	if ($remount and system(@uc))
+	{
+		warn "Couldn't unmount '$mount'\n";
+		return 0;
+	}
+
+	if (system(@mc))
+	{
+		warn "Couldn't mount '$mount'!\n";
+		return 0;
+	}
+
+	return 1;
+}
+
+sub mount_generic
+{
+	my ($m) = @_;
+
+	return 0 unless defined $m;
+	return 0 unless -e -d $m->{mount};
+
+	if ($m->{is_bind})
+	{
+		warn "Error: bind mount '$m->{mount}' is not supported\n";
+		return 0;
+	}
+
+	my %o;
+	%o = %{$m->{options}} if defined $m->{options};
+	delete $o{bind};
+	delete $o{rbind};
+
+	my @optlist;
+	for my $k (keys %o)
+	{
+		push @optlist, defined $o{$k} ? "$k=$o{$k}" : $k;
+	}
+
+	my @mc = ('mount', '-t', $m->{fstype});
+	push @mc, ('-o', join(',', @optlist)) if @optlist;
+	push @mc, ($m->{blkdev}, $m->{mount});
+
+	warn "> @mc\n" if $mode_verbose;
+
+	return 1 unless $mode_run;
+
+	if (system(@mc))
+	{
+		warn "Couldn't mount '$m->{mount}'!\n";
+		return 0;
+	}
+
+	return 1;
 }
 
 sub mt_walk
