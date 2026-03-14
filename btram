@@ -78,7 +78,10 @@ for my $mount (keys %$config)
 	next unless defined $cfg;
 
 	my $n = &mt_get_node($mount_tree, $mount, 1);
-	$n->{cfg} = $cfg;
+	if (defined $n)
+	{
+		$n->{cfg} = $cfg;
+	}
 }
 
 &mt_walk($mount_tree, sub {
@@ -314,6 +317,12 @@ sub mt_get_node
 	my $n = $root;
 	my $p = '';
 
+	if ($create and defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+	{
+		warn "Error: refusing to create node for '$path' under bind mount '$n->{path}'\n";
+		return undef;
+	}
+
 	for my $part (@parts)
 	{
 		$p .= "/$part";
@@ -325,6 +334,12 @@ sub mt_get_node
 			$n->{children}->{$part} = $c;
 		}
 		$n = $c;
+
+		if ($create and defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+		{
+			warn "Error: refusing to create node for '$path' under bind mount '$n->{path}'\n";
+			return undef;
+		}
 	}
 
 	return $n;
