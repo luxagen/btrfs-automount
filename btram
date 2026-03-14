@@ -111,7 +111,7 @@ for my $mount (keys %$config)
 });
 
 my @swap_roots;
-&mt_collect_swap_roots($mount_tree, 0, 0, \@swap_roots);
+&mt_collect_swap_roots($mount_tree, 0, \@swap_roots);
 
 for my $r (@swap_roots)
 {
@@ -167,29 +167,6 @@ sub get_config
 	close $h;
 
 	return \%result;
-}
-
-sub parse_mount
-{
-	return undef unless /^([^\s]+)\s+on\s+([^\s]+)\s+type\s+(.+)\s+\((.+)\)$/;
-
-	my $result =
-	{
-		blkdev => $1,
-		mount => $2,
-		fstype => $3,
-		options => {},
-		done => 0,
-	};
-
-	for (split(/,/, $4))
-	{
-		next unless /^([^=]+)(?:=(.+))?$/;
-
-		$result->{options}->{$1} = $2;
-	}
-
-	return $result;
 }
 
 sub parse_mountinfo
@@ -347,11 +324,9 @@ sub mt_get_node
 
 sub mt_collect_swap_roots
 {
-	my ($n, $ancestor_swap, $bind_ancestor, $out) = @_;
+	my ($n, $ancestor_swap, $out) = @_;
 
 	my $m = $n->{oldMount};
-	my $bind_here = (defined $m and $m->{is_bind}) ? 1 : 0;
-	my $bind = $bind_ancestor || $bind_here;
 
 	my $swap = 0;
 	if (defined $n->{newSubvol})
@@ -370,7 +345,7 @@ sub mt_collect_swap_roots
 
 	for my $c (values %{$n->{children}})
 	{
-		&mt_collect_swap_roots($c, ($ancestor_swap || $swap), $bind, $out);
+		&mt_collect_swap_roots($c, ($ancestor_swap || $swap), $out);
 	}
 }
 
@@ -489,17 +464,6 @@ sub tx_restore_descendants
 	for my $c (values %{$n->{children}})
 	{
 		&tx_restore_descendants($c);
-	}
-}
-
-sub mt_collect_desc_mounts
-{
-	my ($n, $out) = @_;
-
-	for my $c (values %{$n->{children}})
-	{
-		push @$out, $c if defined $c->{oldMount};
-		&mt_collect_desc_mounts($c, $out);
 	}
 }
 
