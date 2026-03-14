@@ -353,17 +353,17 @@ sub do_transaction
 {
 	my ($r) = @_;
 
-	if (&mt_has_bind_ancestor($mount_tree, $r->{path}))
+	if (my $b = &mt_find_bind_ancestor($mount_tree, $r->{path}))
 	{
-		warn "Error: bind mount blocks remount transaction for '$r->{path}'\n";
+		warn "Error: bind mount ancestor '$b' blocks remount transaction for '$r->{path}'\n";
 		return 0;
 	}
 
 	my $rm = $r->{oldMount};
 
-	if (&tx_has_bind_descendant($r))
+	if (my $b = &tx_find_bind_descendant($r))
 	{
-		warn "Error: bind mount blocks remount transaction for '$r->{path}'\n";
+		warn "Error: bind mount descendant '$b' blocks remount transaction for '$r->{path}'\n";
 		return 0;
 	}
 
@@ -405,15 +405,18 @@ sub do_transaction
 	return $swap_ok;
 }
 
-sub tx_has_bind_descendant
+sub tx_find_bind_descendant
 {
 	my ($n) = @_;
 
 	for my $c (values %{$n->{children}})
 	{
 		my $m = $c->{oldMount};
-		return 1 if defined $m and $m->{is_bind};
-		return 1 if &tx_has_bind_descendant($c);
+		return $m->{mount} if defined $m and $m->{is_bind};
+		if (my $b = &tx_find_bind_descendant($c))
+		{
+			return $b;
+		}
 	}
 }
 
@@ -488,7 +491,7 @@ sub do_umount
 	return 1;
 }
 
-sub mt_has_bind_ancestor
+sub mt_find_bind_ancestor
 {
 	my ($root, $path) = @_;
 
@@ -499,7 +502,7 @@ sub mt_has_bind_ancestor
 
 	if (defined $n->{oldMount} and $n->{oldMount}->{is_bind})
 	{
-		return 1;
+		return $n->{path};
 	}
 
 	for my $part (@parts)
@@ -509,7 +512,7 @@ sub mt_has_bind_ancestor
 		$n = $c;
 		if (defined $n->{oldMount} and $n->{oldMount}->{is_bind})
 		{
-			return 1;
+			return $n->{path};
 		}
 	}
 }
