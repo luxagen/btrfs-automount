@@ -650,14 +650,14 @@ sub mount_btrfs
 	delete $o{rw};
 	$o{ro} = undef;
 
-	my @optlist;
+	my @cmdOptList;
 	for my $optKey (keys %o)
 	{
-		push @optlist, defined $o{$optKey} ? "$optKey=$o{$optKey}" : $optKey;
+		push @cmdOptList, defined $o{$optKey} ? "$optKey=$o{$optKey}" : $optKey;
 	}
-	push @optlist, "subvol=$subvol";
+	push @cmdOptList, "subvol=$subvol";
 
-	my @cmdMount = ('mount', '-t', 'btrfs', '-o', join(',', @optlist), $blockDevice, $mountPoint);
+	my @cmdMount = ('mount', '-t', 'btrfs', '-o', join(',', @cmdOptList), $blockDevice, $mountPoint);
 
 	if ($mode_verbose)
 	{
@@ -700,14 +700,14 @@ sub mount_generic
 	delete $o{bind};
 	delete $o{rbind};
 
-	my @optlist;
+	my @cmdOptList;
 	for my $optKey (keys %o)
 	{
-		push @optlist, defined $o{$optKey} ? "$optKey=$o{$optKey}" : $optKey;
+		push @cmdOptList, defined $o{$optKey} ? "$optKey=$o{$optKey}" : $optKey;
 	}
 
 	my @cmdMount = ('mount', '-t', $mountInfo->{fstype});
-	push @cmdMount, ('-o', join(',', @optlist)) if @optlist;
+	push @cmdMount, ('-o', join(',', @cmdOptList)) if @cmdOptList;
 	push @cmdMount, ($mountInfo->{blkdev}, $mountInfo->{mount});
 
 	warn "> @cmdMount\n" if $mode_verbose;
@@ -793,15 +793,15 @@ sub find_latest
 	{
 		die unless /^\Q$rootMount\/$ssdir\/$ssnPrefix.\E(\d+(?:_\d+)?)$/;
 
-		my $ssnCandidate = "$ssnPrefix.$1";
+		my $snapshotCandidate = "$ssnPrefix.$1";
 
-		if (my $status = &sv_impure(&sv_info($rootMount, "$ssdir/$ssnCandidate")))
+		if (my $status = &sv_impure(&sv_info($rootMount, "$ssdir/$snapshotCandidate")))
 		{
-			warn "Warning: ignoring $status subvol '$ssdir/$ssnCandidate\n";
+			warn "Warning: ignoring $status subvol '$ssdir/$snapshotCandidate\n";
 			next;
 		}
 
-		$snapshotName = $ssnCandidate if   (not defined $snapshotName)  or  $ssnCandidate gt $snapshotName;
+		$snapshotName = $snapshotCandidate if   (not defined $snapshotName)  or  $snapshotCandidate gt $snapshotName;
 	}
 
 	return "$ssdir/$snapshotName" if defined $snapshotName;
@@ -875,7 +875,7 @@ sub process_mount
 	return unless $ssnCurr =~ /^(.+)\.\d+(?:_\d+)?/;
 	my $ssPrefix = $1;
 
-	my $svMounted = &sv_info($rootMount, $subvol);
+	my $subvolInfoMounted = &sv_info($rootMount, $subvol);
 
 	print "No change: '$mountPoint' -> '$rootMount/$subvol'\n" if $mode_verbose;
 
