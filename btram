@@ -525,13 +525,15 @@ sub tx_umount_descendants
 	for my $c (values %{$n->{children}})
 	{
 		$rc = max($rc, &tx_umount_descendants($c));
+
+		my $m = $c->{oldMount};
+		next unless defined $m;
+
+		my $ok = &do_umount($m->{mount});
+		$rc = max($rc, BTRAM_UMOUNT_FAILED) unless $ok;
 	}
 
-	my $m = $n->{oldMount};
-	return $rc unless defined $m;
-
-	my $ok = &do_umount($m->{mount});
-	return $ok ? $rc : max($rc, BTRAM_UMOUNT_FAILED);
+	return $rc;
 }
 
 sub tx_restore_descendants
@@ -539,39 +541,38 @@ sub tx_restore_descendants
 	my ($n) = @_;
 	my $rc = 0;
 
-	my $m = $n->{oldMount};
-	if (defined $m)
-	{
-		unless (-e -d $m->{mount})
-		{
-			warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
-			$rc = max($rc, 2);
-			goto children;
-		}
-
-		if ($m->{is_bind})
-		{
-			warn "Error: not restoring bind mount '$m->{mount}'\n";
-			$rc = max($rc, BTRAM_BIND_BLOCK);
-			goto children;
-		}
-
-		if ($m->{fstype} eq 'btrfs' and defined $n->{newSubvol} and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol})
-		{
-			my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
-			$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
-		}
-		else
-		{
-			my $ok = &mount_generic($m);
-			$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
-		}
-	}
-
-	children:
-
 	for my $c (values %{$n->{children}})
 	{
+		my $m = $c->{oldMount};
+		if (defined $m)
+		{
+			unless (-e -d $m->{mount})
+			{
+				warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
+				$rc = max($rc, 2);
+				goto recurse;
+			}
+
+			if ($m->{is_bind})
+			{
+				warn "Error: not restoring bind mount '$m->{mount}'\n";
+				$rc = max($rc, BTRAM_BIND_BLOCK);
+				goto recurse;
+			}
+
+			if ($m->{fstype} eq 'btrfs' and defined $c->{newSubvol} and defined $c->{oldSubvol} and $c->{newSubvol} ne $c->{oldSubvol})
+			{
+				my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $c->{newSubvol}, $m->{options}, 0);
+				$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
+			}
+			else
+			{
+				my $ok = &mount_generic($m);
+				$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
+			}
+		}
+
+		recurse:
 		$rc = max($rc, &tx_restore_descendants($c));
 	}
 
