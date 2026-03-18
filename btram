@@ -261,25 +261,25 @@ sub parse_mountinfo
 
 	chomp $line;
 
-	my ($left, $right) = split(/\s-\s/, $line, 2);
-	return undef unless defined $right;
+	my ($lhs, $rhs) = split(/\s-\s/, $line, 2);
+	return undef unless defined $rhs;
 
-	my @l = split(/\s+/, $left);
-	return undef unless @l >= 6;
+	my @lhsFields = split(/\s+/, $lhs);
+	return undef unless @lhsFields >= 6;
 
-	my ($root, $mount, $opts) = @l[3,4,5];
-	$root  = &unescape_mountinfo($root);
-	$mount = &unescape_mountinfo($mount);
+	my ($root, $mountPoint, $mountOpts) = @lhsFields[3,4,5];
+	$root       = &unescape_mountinfo($root);
+	$mountPoint = &unescape_mountinfo($mountPoint);
 
-	my @r = split(/\s+/, $right, 3);
-	return undef unless @r == 3;
-	my ($fstype, $source, $superopts) = @r;
+	my @rhsFields = split(/\s+/, $rhs, 3);
+	return undef unless @rhsFields == 3;
+	my ($fstype, $source, $superOpts) = @rhsFields;
 	$source = &unescape_mountinfo($source);
 
 	my $result =
 	{
 		blkdev => $source,
-		mount => $mount,
+		mount => $mountPoint,
 		fstype => $fstype,
 		options => {},
 		mnt_opts => {},
@@ -289,8 +289,8 @@ sub parse_mountinfo
 		done => 0,
 	};
 
-	&parse_mount_opts($result->{mnt_opts}, $opts);
-	&parse_mount_opts($result->{super_opts}, $superopts);
+	&parse_mount_opts($result->{mnt_opts}, $mountOpts);
+	&parse_mount_opts($result->{super_opts}, $superOpts);
 
 	%{$result->{options}} = (%{$result->{mnt_opts}}, %{$result->{super_opts}});
 
@@ -301,25 +301,25 @@ sub parse_mountinfo
 
 sub parse_mount_opts
 {
-	my ($out, $s) = @_;
+	my ($out, $opts) = @_;
 
-	return unless defined $out and defined $s;
+	return unless defined $out and defined $opts;
 
-	for (split(/,/, $s))
+	for my $opt (split(/,/, $opts))
 	{
-		next unless /^([^=]+)(?:=(.+))?$/;
+		next unless $opt =~ /^([^=]+)(?:=(.+))?$/;
 		$out->{$1} = $2;
 	}
 }
 
 sub unescape_mountinfo
 {
-	my ($s) = @_;
+	my ($escaped) = @_;
 
-	return undef unless defined $s;
+	return undef unless defined $escaped;
 
-	$s =~ s/\\([0-7]{3})/chr(oct($1))/ge;
-	return $s;
+	$escaped =~ s/\\([0-7]{3})/chr(oct($1))/ge;
+	return $escaped;
 }
 
 sub mt_new
