@@ -445,92 +445,95 @@ sub mt_collect_swap_roots
 
 sub do_transaction
 {
-	my ($r) = @_;
+	my ($nodeTXRoot) = @_;
 	my $rc = 0;
 
-	if (my $b = &mt_find_bind_ancestor($mount_tree, $r->{path}))
+	if (my $bindMountPath = &mt_find_bind_ancestor($mount_tree, $nodeTXRoot->{path}))
 	{
-		warn "Error: bind mount ancestor '$b' blocks remount transaction for '$r->{path}'\n";
+		warn "Error: bind mount ancestor '$bindMountPath' blocks remount transaction for '$nodeTXRoot->{path}'\n";
 		return BTRAM_BIND_BLOCK;
 	}
 
-	my $rm = $r->{oldMount};
+	my $mountInfoTXRoot = $nodeTXRoot->{oldMount};
 
-	if (my $b = &tx_find_bind_descendant($r))
+	if (my $bindMountPath = &tx_find_bind_descendant($nodeTXRoot))
 	{
-		warn "Error: bind mount descendant '$b' blocks remount transaction for '$r->{path}'\n";
+		warn "Error: bind mount descendant '$bindMountPath' blocks remount transaction for '$nodeTXRoot->{path}'\n";
 		return BTRAM_BIND_BLOCK;
 	}
 
-	$rc = max($rc, &tx_umount_descendants($r));
+	$rc = max($rc, &tx_umount_descendants($nodeTXRoot));
 	return $rc if $rc >= 64;
 
 	my $swap_ok = 1;
-	if (defined $rm)
+	if (defined $mountInfoTXRoot)
 	{
-		my $old = $r->{oldSubvol};
-		my $new = $r->{newSubvol};
-		$swap_ok = &mount_btrfs($rm->{mount}, $rm->{blkdev}, $new, $rm->{options}, 1);
+		my $subvolOld = $nodeTXRoot->{oldSubvol};
+		my $subvolNew = $nodeTXRoot->{newSubvol};
+		$swap_ok = &mount_btrfs($mountInfoTXRoot->{mount}, $mountInfoTXRoot->{blkdev}, $subvolNew, $mountInfoTXRoot->{options}, 1);
 		unless ($swap_ok)
 		{
-			warn "Error: remount failed for '$rm->{mount}', attempting rollback\n";
-			my $rb = &mount_btrfs($rm->{mount}, $rm->{blkdev}, $old, $rm->{options}, 0);
-			warn "Error: rollback failed for '$rm->{mount}'\n" unless $rb;
+			warn "Error: remount failed for '$mountInfoTXRoot->{mount}', attempting rollback\n";
+			my $rollbackOk = &mount_btrfs($mountInfoTXRoot->{mount}, $mountInfoTXRoot->{blkdev}, $subvolOld, $mountInfoTXRoot->{options}, 0);
+			warn "Error: rollback failed for '$mountInfoTXRoot->{mount}'\n" unless $rollbackOk;
 			$rc = max($rc, BTRAM_MOUNT_FAILED);
-			$rc = max($rc, BTRAM_ROLLBACK_FAILED) unless $rb;
+			$rc = max($rc, BTRAM_ROLLBACK_FAILED) unless $rollbackOk;
 		}
 	}
 	else
 	{
-		my $cfg = $r->{cfg};
-		die unless defined $cfg;
-		my $rootMount = $cfg->{root};
-		my $blkdev = $root2bd{$rootMount};
-		unless (defined $blkdev)
+		my $configEntry = $nodeTXRoot->{cfg};
+		die unless defined $configEntry;
+		my $rootMount = $configEntry->{root};
+		my $blockDevice = $root2bd{$rootMount};
+		unless (defined $blockDevice)
 		{
-			warn "Error: cannot mount '$r->{path}' because root mount '$rootMount' is not known\n";
+			warn "Error: cannot mount '$nodeTXRoot->{path}' because root mount '$rootMount' is not known\n";
 			$swap_ok = 0;
 			$rc = max($rc, 2);
 		}
 		else
 		{
-			$swap_ok = &mount_btrfs($r->{path}, $blkdev, $r->{newSubvol}, {ro => undef}, 0);
+			$swap_ok = &mount_btrfs($nodeTXRoot->{path}, $blockDevice, $nodeTXRoot->{newSubvol}, {ro => undef}, 0);
 			$rc = max($rc, BTRAM_MOUNT_FAILED) unless $swap_ok;
 		}
 	}
 
 	$rc = max($rc, 1) if $swap_ok;
 
-	$rc = max($rc, &tx_restore_descendants($r));
+	$rc = max($rc, &tx_restore_descendants($nodeTXRoot));
 
 	return $rc;
 }
 
 sub tx_find_bind_descendant
 {
-	my ($n) = @_;
+	my ($node) = @_;
 
-	for my $c (values %{$n->{children}})
+	for my $child (values %{$node->{children}})
 	{
-		my $m = $c->{oldMount};
-		return $m->{mount} if defined $m and $m->{is_bind};
-		return $b if (my $b = &tx_find_bind_descendant($c));
+		my $mountInfo = $child->{oldMount};
+		return $mountInfo->{mount} if defined $mountInfo and $mountInfo->{is_bind};
+		if (my $bindMountPath = &tx_find_bind_descendant($child))
+		{
+			return $bindMountPath;
+		}
 	}
 }
 
 sub tx_umount_descendants
 {
-	my ($n) = @_;
+	my ($node) = @_;
 	my $rc = 0;
 
-	for my $c (values %{$n->{children}})
+	for my $child (values %{$node->{children}})
 	{
-		$rc = max($rc, &tx_umount_descendants($c));
+		$rc = max($rc, &tx_umount_descendants($child));
 
-		my $m = $c->{oldMount};
-		next unless defined $m;
+		my $mountInfo = $child->{oldMount};
+		next unless defined $mountInfo;
 
-		my $ok = &do_umount($m->{mount});
+		my $ok = &do_umount($mountInfo->{mount});
 		$rc = max($rc, BTRAM_UMOUNT_FAILED) unless $ok;
 	}
 
@@ -539,13 +542,13 @@ sub tx_umount_descendants
 
 sub tx_restore_descendants
 {
-	my ($n) = @_;
+	my ($node) = @_;
 	my $rc = 0;
 
-	for my $c (values %{$n->{children}})
+	for my $child (values %{$node->{children}})
 	{
-		$rc = max($rc, &tx_restore_node($c));
-		$rc = max($rc, &tx_restore_descendants($c));
+		$rc = max($rc, &tx_restore_node($child));
+		$rc = max($rc, &tx_restore_descendants($child));
 	}
 
 	return $rc;
@@ -553,30 +556,30 @@ sub tx_restore_descendants
 
 sub tx_restore_node
 {
-	my ($n) = @_;
+	my ($node) = @_;
 
-	my $m = $n->{oldMount};
-	return 0 unless defined $m;
+	my $mountInfo = $node->{oldMount};
+	return 0 unless defined $mountInfo;
 
-	unless (-e -d $m->{mount})
+	unless (-e -d $mountInfo->{mount})
 	{
-		warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
+		warn "Error: not restoring '$mountInfo->{mount}' because mountpoint directory is missing\n";
 		return 2;
 	}
 
-	if ($m->{is_bind})
+	if ($mountInfo->{is_bind})
 	{
-		warn "Error: not restoring bind mount '$m->{mount}'\n";
+		warn "Error: not restoring bind mount '$mountInfo->{mount}'\n";
 		return BTRAM_BIND_BLOCK;
 	}
 
-	if ($m->{fstype} eq 'btrfs' and defined $n->{newSubvol} and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol})
+	if ($mountInfo->{fstype} eq 'btrfs' and defined $node->{newSubvol} and defined $node->{oldSubvol} and $node->{newSubvol} ne $node->{oldSubvol})
 	{
-		my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
+		my $ok = &mount_btrfs($mountInfo->{mount}, $mountInfo->{blkdev}, $node->{newSubvol}, $mountInfo->{options}, 0);
 		return $ok ? 0 : BTRAM_RESTORE_FAILED;
 	}
 
-	my $ok = &mount_generic($m);
+	my $ok = &mount_generic($mountInfo);
 	return $ok ? 0 : BTRAM_RESTORE_FAILED;
 }
 
