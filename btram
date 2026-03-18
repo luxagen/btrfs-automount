@@ -585,19 +585,19 @@ sub tx_restore_node
 
 sub do_umount
 {
-	my ($mount) = @_;
+	my ($mountPoint) = @_;
 
-	my @uc = ('umount');
-	push @uc, '-f' if $mode_force;
-	push @uc, $mount;
+	my @cmdUmount = ('umount');
+	push @cmdUmount, '-f' if $mode_force;
+	push @cmdUmount, $mountPoint;
 
-	warn "> @uc\n" if $mode_verbose;
+	warn "> @cmdUmount\n" if $mode_verbose;
 
 	return 1 unless $mode_run;
 
-	if (system(@uc))
+	if (system(@cmdUmount))
 	{
-		warn "Couldn't unmount '$mount'\n";
+		warn "Couldn't unmount '$mountPoint'\n";
 		return 0;
 	}
 
@@ -632,14 +632,14 @@ sub mt_find_bind_ancestor
 
 sub mount_btrfs
 {
-	my ($mount, $blkdev, $sv, $opts, $remount) = @_;
+	my ($mountPoint, $blockDevice, $subvol, $opts, $remount) = @_;
 
-	return 0 unless defined $mount and defined $blkdev and defined $sv;
-	return 0 unless -e -d $mount;
+	return 0 unless defined $mountPoint and defined $blockDevice and defined $subvol;
+	return 0 unless -e -d $mountPoint;
 
-	my @uc = ('umount');
-	push @uc, '-f' if $mode_force;
-	push @uc, $mount;
+	my @cmdUmount = ('umount');
+	push @cmdUmount, '-f' if $mode_force;
+	push @cmdUmount, $mountPoint;
 
 	my %o;
 	%o = %$opts if defined $opts;
@@ -651,31 +651,31 @@ sub mount_btrfs
 	$o{ro} = undef;
 
 	my @optlist;
-	for my $k (keys %o)
+	for my $optKey (keys %o)
 	{
-		push @optlist, defined $o{$k} ? "$k=$o{$k}" : $k;
+		push @optlist, defined $o{$optKey} ? "$optKey=$o{$optKey}" : $optKey;
 	}
-	push @optlist, "subvol=$sv";
+	push @optlist, "subvol=$subvol";
 
-	my @mc = ('mount', '-t', 'btrfs', '-o', join(',', @optlist), $blkdev, $mount);
+	my @cmdMount = ('mount', '-t', 'btrfs', '-o', join(',', @optlist), $blockDevice, $mountPoint);
 
 	if ($mode_verbose)
 	{
-		warn "> @uc\n" if $remount;
-		warn "> @mc\n";
+		warn "> @cmdUmount\n" if $remount;
+		warn "> @cmdMount\n";
 	}
 
 	return 1 unless $mode_run;
 
-	if ($remount and system(@uc))
+	if ($remount and system(@cmdUmount))
 	{
-		warn "Couldn't unmount '$mount'\n";
+		warn "Couldn't unmount '$mountPoint'\n";
 		return 0;
 	}
 
-	if (system(@mc))
+	if (system(@cmdMount))
 	{
-		warn "Couldn't mount '$mount'!\n";
+		warn "Couldn't mount '$mountPoint'!\n";
 		return 0;
 	}
 
@@ -684,39 +684,39 @@ sub mount_btrfs
 
 sub mount_generic
 {
-	my ($m) = @_;
+	my ($mountInfo) = @_;
 
-	return 0 unless defined $m;
-	return 0 unless -e -d $m->{mount};
+	return 0 unless defined $mountInfo;
+	return 0 unless -e -d $mountInfo->{mount};
 
-	if ($m->{is_bind})
+	if ($mountInfo->{is_bind})
 	{
-		warn "Error: bind mount '$m->{mount}' is not supported\n";
+		warn "Error: bind mount '$mountInfo->{mount}' is not supported\n";
 		return 0;
 	}
 
 	my %o;
-	%o = %{$m->{options}} if defined $m->{options};
+	%o = %{$mountInfo->{options}} if defined $mountInfo->{options};
 	delete $o{bind};
 	delete $o{rbind};
 
 	my @optlist;
-	for my $k (keys %o)
+	for my $optKey (keys %o)
 	{
-		push @optlist, defined $o{$k} ? "$k=$o{$k}" : $k;
+		push @optlist, defined $o{$optKey} ? "$optKey=$o{$optKey}" : $optKey;
 	}
 
-	my @mc = ('mount', '-t', $m->{fstype});
-	push @mc, ('-o', join(',', @optlist)) if @optlist;
-	push @mc, ($m->{blkdev}, $m->{mount});
+	my @cmdMount = ('mount', '-t', $mountInfo->{fstype});
+	push @cmdMount, ('-o', join(',', @optlist)) if @optlist;
+	push @cmdMount, ($mountInfo->{blkdev}, $mountInfo->{mount});
 
-	warn "> @mc\n" if $mode_verbose;
+	warn "> @cmdMount\n" if $mode_verbose;
 
 	return 1 unless $mode_run;
 
-	if (system(@mc))
+	if (system(@cmdMount))
 	{
-		warn "Couldn't mount '$m->{mount}'!\n";
+		warn "Couldn't mount '$mountInfo->{mount}'!\n";
 		return 0;
 	}
 
