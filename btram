@@ -129,7 +129,7 @@ for my $mount (keys %$config)
 });
 
 my @swap_roots;
-&mt_collect_swap_roots($mount_tree, 0, \@swap_roots);
+&mt_collect_swap_roots($mount_tree, \@swap_roots);
 
 if (not $mode_run)
 {
@@ -409,7 +409,7 @@ sub mt_get_node
 
 sub mt_collect_swap_roots
 {
-	my ($n, $ancestor_swap, $out) = @_;
+	my ($n, $out) = @_;
 
 	my $m = $n->{oldMount};
 
@@ -426,11 +426,18 @@ sub mt_collect_swap_roots
 		}
 	}
 
-	push @$out, $n if $swap and not $ancestor_swap;
+	if ($swap)
+	{
+		if (-e -d $n->{path})
+		{
+			push @$out, $n;
+			return;
+		}
+	}
 
 	for my $c (values %{$n->{children}})
 	{
-		&mt_collect_swap_roots($c, ($ancestor_swap || $swap), $out);
+		&mt_collect_swap_roots($c, $out);
 	}
 }
 
