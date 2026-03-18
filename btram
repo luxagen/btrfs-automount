@@ -6,6 +6,7 @@ use warnings;
 
 use Getopt::Lucid qw( :all );
 use IPC::Run qw(run);
+use List::Util qw(max);
 
 my @options_spec = (
 	Switch(    '--run|-r')->doc('Actually perform [re]mount operations' ),
@@ -117,14 +118,14 @@ my @swap_roots;
 
 if (not $mode_run)
 {
-	$rc = 1 if @swap_roots and $rc < 1;
+	$rc = max($rc, 1) if @swap_roots;
 }
 else
 {
 	for my $r (@swap_roots)
 	{
 		my $trc = &do_transaction($r);
-		$rc = $trc if $trc > $rc;
+		$rc = max($rc, $trc);
 	}
 }
 
@@ -232,7 +233,7 @@ sub validate_config
 		if ($retryable)
 		{
 			$config->{$mount} = undef;
-			$rc = 2 if $rc < 2;
+			$rc = max($rc, 2);
 		}
 	}
 
@@ -439,7 +440,7 @@ sub do_transaction
 	}
 
 	my $urc = &tx_umount_descendants($r);
-	$rc = $urc if $urc > $rc;
+	$rc = max($rc, $urc);
 	return $rc if $rc >= 64;
 
 	my $swap_ok = 1;
@@ -466,7 +467,7 @@ sub do_transaction
 		{
 			warn "Error: cannot mount '$r->{path}' because root mount '$rootMount' is not known\n";
 			$swap_ok = 0;
-			$rc = 2 if $rc < 2;
+			$rc = max($rc, 2);
 		}
 		else
 		{
@@ -475,10 +476,10 @@ sub do_transaction
 		}
 	}
 
-	$rc = 1 if $swap_ok and $rc < 1;
+	$rc = max($rc, 1) if $swap_ok;
 
 	my $rrc = &tx_restore_descendants($r);
-	$rc = $rrc if $rrc > $rc;
+	$rc = max($rc, $rrc);
 
 	return $rc;
 }
@@ -491,10 +492,7 @@ sub tx_find_bind_descendant
 	{
 		my $m = $c->{oldMount};
 		return $m->{mount} if defined $m and $m->{is_bind};
-		if (my $b = &tx_find_bind_descendant($c))
-		{
-			return $b;
-		}
+		return $b if (my $b = &tx_find_bind_descendant($c));
 	}
 }
 
@@ -506,15 +504,14 @@ sub tx_umount_descendants
 	for my $c (values %{$n->{children}})
 	{
 		my $crc = &tx_umount_descendants($c);
-		$rc = $crc if $crc > $rc;
+		$rc = max($rc, $crc);
 	}
 
 	my $m = $n->{oldMount};
 	return $rc unless defined $m;
 
 	my $ok = &do_umount($m->{mount});
-	return 64 unless $ok;
-	return $rc;
+	return $ok ? $rc : 64;
 }
 
 sub tx_restore_descendants
@@ -528,7 +525,7 @@ sub tx_restore_descendants
 		unless (-e -d $m->{mount})
 		{
 			warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
-			$rc = 2 if $rc < 2;
+			$rc = max($rc, 2);
 			goto children;
 		}
 
@@ -556,7 +553,7 @@ sub tx_restore_descendants
 	for my $c (values %{$n->{children}})
 	{
 		my $crc = &tx_restore_descendants($c);
-		$rc = $crc if $crc > $rc;
+		$rc = max($rc, $crc);
 	}
 
 	return $rc;
