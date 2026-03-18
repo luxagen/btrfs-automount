@@ -543,40 +543,40 @@ sub tx_restore_descendants
 
 	for my $c (values %{$n->{children}})
 	{
-		my $m = $c->{oldMount};
-		if (defined $m)
-		{
-			unless (-e -d $m->{mount})
-			{
-				warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
-				$rc = max($rc, 2);
-				goto recurse;
-			}
-
-			if ($m->{is_bind})
-			{
-				warn "Error: not restoring bind mount '$m->{mount}'\n";
-				$rc = max($rc, BTRAM_BIND_BLOCK);
-				goto recurse;
-			}
-
-			if ($m->{fstype} eq 'btrfs' and defined $c->{newSubvol} and defined $c->{oldSubvol} and $c->{newSubvol} ne $c->{oldSubvol})
-			{
-				my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $c->{newSubvol}, $m->{options}, 0);
-				$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
-			}
-			else
-			{
-				my $ok = &mount_generic($m);
-				$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
-			}
-		}
-
-		recurse:
+		$rc = max($rc, &tx_restore_node($c));
 		$rc = max($rc, &tx_restore_descendants($c));
 	}
 
 	return $rc;
+}
+
+sub tx_restore_node
+{
+	my ($n) = @_;
+
+	my $m = $n->{oldMount};
+	return 0 unless defined $m;
+
+	unless (-e -d $m->{mount})
+	{
+		warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
+		return 2;
+	}
+
+	if ($m->{is_bind})
+	{
+		warn "Error: not restoring bind mount '$m->{mount}'\n";
+		return BTRAM_BIND_BLOCK;
+	}
+
+	if ($m->{fstype} eq 'btrfs' and defined $n->{newSubvol} and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol})
+	{
+		my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
+		return $ok ? 0 : BTRAM_RESTORE_FAILED;
+	}
+
+	my $ok = &mount_generic($m);
+	return $ok ? 0 : BTRAM_RESTORE_FAILED;
 }
 
 sub do_umount
