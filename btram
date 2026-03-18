@@ -433,6 +433,7 @@ sub mt_collect_swap_roots
 			push @$out, $n;
 			return;
 		}
+		return;
 	}
 
 	for my $c (values %{$n->{children}})
