@@ -47,28 +47,28 @@ my $config = &get_config_raw('/etc/btram.conf');
 my $rc = &validate_config($config);
 
 my %is_root_mount;
-for my $m (keys %$config)
+for my $mountPoint (keys %$config)
 {
-	next unless defined $config->{$m};
-	$is_root_mount{$config->{$m}->{root}} = 1;
+	next unless defined $config->{$mountPoint};
+	$is_root_mount{$config->{$mountPoint}->{root}} = 1;
 }
 
 our (%bd2root, %root2bd); # Map between device nodes and root-subvol mounts
 
-open my $h, '<', '/proc/self/mountinfo' or die;
+open my $mountinfoHandle, '<', '/proc/self/mountinfo' or die;
 
 # TODO check that mount points corresponding to config items have snapshots mounted that conform to config's pattern
 
 my $mount_tree = &mt_new('/', '/');
 
-while (<$h>)
+while (<$mountinfoHandle>)
 {
-	next unless my $m = &parse_mountinfo($_);
-	next if &is_ignored_mount_path($m->{mount});
-	&mt_insert($mount_tree, $m->{mount}, $m);
+	next unless my $mountInfo = &parse_mountinfo($_);
+	next if &is_ignored_mount_path($mountInfo->{mount});
+	&mt_insert($mount_tree, $mountInfo->{mount}, $mountInfo);
 }
 
-close $h;
+close $mountinfoHandle;
 
 &mt_walk($mount_tree, sub {
 	my ($node) = @_;
@@ -92,13 +92,13 @@ close $h;
 
 for my $mount (keys %$config)
 {
-	my $cfg = $config->{$mount};
-	next unless defined $cfg;
+	my $configEntry = $config->{$mount};
+	next unless defined $configEntry;
 
-	my $n = &mt_get_node($mount_tree, $mount, 1);
-	if (defined $n)
+	my $node = &mt_get_node($mount_tree, $mount, 1);
+	if (defined $node)
 	{
-		$n->{cfg} = $cfg;
+		$node->{cfg} = $configEntry;
 	}
 }
 
@@ -167,9 +167,9 @@ sub get_config_raw
 
 	my %result;
 
-	open my $h, '<', $file or do { warn "Missing/inaccessible config; nothing to do\n"; exit EX_NOINPUT; };
+	open my $configHandle, '<', $file or do { warn "Missing/inaccessible config; nothing to do\n"; exit EX_NOINPUT; };
 
-	while (<$h>)
+	while (<$configHandle>)
 	{
 		next if /^\n$/;
 		next if /^\s*#/;
@@ -191,7 +191,7 @@ sub get_config_raw
 		$result{$1}->{prefix} = $4;
 	}
 
-	close $h;
+	close $configHandle;
 
 	return \%result;
 }
@@ -206,11 +206,11 @@ sub validate_config
 
 	for my $mount (keys %$config)
 	{
-		my $cfg = $config->{$mount};
-		next unless defined $cfg;
+		my $configEntry = $config->{$mount};
+		next unless defined $configEntry;
 
-		my $root = $cfg->{root};
-		my $dir = $cfg->{dir};
+		my $root = $configEntry->{root};
+		my $dir = $configEntry->{dir};
 		unless (defined $root and defined $dir)
 		{
 			warn "Error: internal error: config missing required fields\n";
@@ -336,37 +336,37 @@ sub mt_new
 
 sub mt_insert
 {
-	my ($root, $path, $m) = @_;
+	my ($root, $path, $mountInfo) = @_;
 
-	die unless defined $root and defined $path and defined $m;
+	die unless defined $root and defined $path and defined $mountInfo;
 
 	my @parts = grep { $_ ne '' } split(m{/+}, $path);
 
-	my $n = $root;
-	my $p = '';
+	my $node = $root;
+	my $pathSoFar = '';
  
 	for my $part (@parts)
 	{
-		$p .= "/$part";
+		$pathSoFar .= "/$part";
 
-		my $c = $n->{children}->{$part};
-		unless (defined $c)
+		my $child = $node->{children}->{$part};
+		unless (defined $child)
 		{
-			$c = &mt_new($part, $p);
-			$n->{children}->{$part} = $c;
+			$child = &mt_new($part, $pathSoFar);
+			$node->{children}->{$part} = $child;
 		}
 
-		$n = $c;
+		$node = $child;
 	}
 
-	die "Duplicate mount point '$path'\n" if defined $n->{oldMount};
+	die "Duplicate mount point '$path'\n" if defined $node->{oldMount};
 
-	$n->{oldMount} = $m;
+	$node->{oldMount} = $mountInfo;
 
-	my $sv = $m->{options}->{subvol};
-	$sv = '' if defined $sv and $sv eq '/';
-	$sv =~ s{^/}{} if defined $sv;
-	$n->{oldSubvol} = $sv;
+	my $subvol = $mountInfo->{options}->{subvol};
+	$subvol = '' if defined $subvol and $subvol eq '/';
+	$subvol =~ s{^/}{} if defined $subvol;
+	$node->{oldSubvol} = $subvol;
 }
 
 sub mt_get_node
@@ -611,21 +611,21 @@ sub mt_find_bind_ancestor
 	return undef unless defined $root and defined $path;
 
 	my @parts = grep { $_ ne '' } split(m{/+}, $path);
-	my $n = $root;
+	my $node = $root;
 
-	if (defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+	if (defined $node->{oldMount} and $node->{oldMount}->{is_bind})
 	{
-		return $n->{path};
+		return $node->{path};
 	}
 
 	for my $part (@parts)
 	{
-		my $c = $n->{children}->{$part};
-		last unless defined $c;
-		$n = $c;
-		if (defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+		my $child = $node->{children}->{$part};
+		last unless defined $child;
+		$node = $child;
+		if (defined $node->{oldMount} and $node->{oldMount}->{is_bind})
 		{
-			return $n->{path};
+			return $node->{path};
 		}
 	}
 }
@@ -753,23 +753,23 @@ sub sv_info
 	my ($rootMount, $sv) = @_;
 
 	# TODO list invocation!
-	open my $h, '-|', "btrfs subvolume show '$rootMount/$sv'" or die;
+	open my $subvolShowHandle, '-|', "btrfs subvolume show '$rootMount/$sv'" or die;
 
-	my $header = <$h>;
+	my $header = <$subvolShowHandle>;
 	die unless   defined $header  and  $header eq "$sv\n";
 
-	my %r=();
+	my %result = ();
 
-	while (<$h>)
+	while (<$subvolShowHandle>)
 	{
 		last if /^\s*Snapshot\(s\):/; # Stop when the snapshot list starts
 		die unless /^\s*([^:]*):\s*(.+)$/;
-		$r{$1} = $2;
+		$result{$1} = $2;
 	}
 
-	close $h;
+	close $subvolShowHandle;
 
-	return \%r;
+	return \%result;
 }
 
 sub sv_impure
@@ -788,7 +788,7 @@ sub find_latest
 	die unless $ssnPrefix;
 
 	# See whether there's a newer snapshot
-	my $ssn;
+	my $snapshotName;
 	while ($_ = glob("$rootMount/$ssdir/$ssnPrefix.*"))
 	{
 		die unless /^\Q$rootMount\/$ssdir\/$ssnPrefix.\E(\d+(?:_\d+)?)$/;
@@ -801,10 +801,10 @@ sub find_latest
 			next;
 		}
 
-		$ssn = $ssnCandidate if   (not defined $ssn)  or  $ssnCandidate gt $ssn;
+		$snapshotName = $ssnCandidate if   (not defined $snapshotName)  or  $ssnCandidate gt $snapshotName;
 	}
 
-	return "$ssdir/$ssn" if defined $ssn;
+	return "$ssdir/$snapshotName" if defined $snapshotName;
 }
 
 sub process_mount
