@@ -27,11 +27,13 @@ my $mode_force   = $options->get_force();
 
 my @ignore_mount_prefixes = qw(/proc /sys /sysfs /var);
 
-my $config = &get_config('/etc/btram.conf');
+my $config = &get_config_raw('/etc/btram.conf');
+my $rc = &validate_config($config);
 
 my %is_root_mount;
 for my $m (keys %$config)
 {
+	next unless defined $config->{$m};
 	$is_root_mount{$config->{$m}->{root}} = 1;
 }
 
@@ -113,12 +115,20 @@ for my $mount (keys %$config)
 my @swap_roots;
 &mt_collect_swap_roots($mount_tree, 0, \@swap_roots);
 
-for my $r (@swap_roots)
+if (not $mode_run)
 {
-	&do_transaction($r);
+	$rc = 1 if @swap_roots and $rc < 1;
+}
+else
+{
+	for my $r (@swap_roots)
+	{
+		my $trc = &do_transaction($r);
+		$rc = $trc if $trc > $rc;
+	}
 }
 
-exit 0;
+exit $rc;
 
 ################################################################################
 
@@ -135,13 +145,13 @@ https://github.com/luxagen/btram
 EOF
 }
 
-sub get_config
+sub get_config_raw
 {
 	my ($file) = @_;
 
 	my %result;
 
-	open my $h, '<', $file or die "Missing/inaccessible config; nothing to do\n";
+	open my $h, '<', $file or do { warn "Missing/inaccessible config; nothing to do\n"; exit 64; };
 
 	while (<$h>)
 	{
@@ -149,24 +159,84 @@ sub get_config
 		next if /^\s*#/;
 
 
-		die "Error: config line is malformed\n" unless /^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/;
-		die "Error: config line is missing field(s)\n" unless  $1 and $2 and $3 and $4;
-
-		die "Error: subvol mount point '$1' missing\n" unless -e -d $1;
-		die "Error: volume mount point '$2' missing\n" unless -e -d $2;
-		die "Error: snapshot directory '$2/$3' missing\n" unless -e -d "$2/$3";
+		unless (/^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/)
+		{
+			warn "Error: config line is malformed\n";
+			exit 64;
+		}
+		unless ($1 and $2 and $3 and $4)
+		{
+			warn "Error: config line is missing field(s)\n";
+			exit 64;
+		}
 
 		$result{$1}->{root  } = $2;
 		$result{$1}->{dir   } = $3;
 		$result{$1}->{prefix} = $4;
-
-		die "Error: subvol mount point '$1' is under an ignored mount tree\n" if &is_ignored_mount_path($1);
-		die "Error: volume mount point '$2' is under an ignored mount tree\n" if &is_ignored_mount_path($2);
 	}
 
 	close $h;
 
 	return \%result;
+}
+
+sub validate_config
+{
+	my ($config) = @_;
+
+	return 64 unless defined $config;
+
+	my $rc = 0;
+
+	for my $mount (keys %$config)
+	{
+		my $cfg = $config->{$mount};
+		next unless defined $cfg;
+
+		my $root = $cfg->{root};
+		my $dir = $cfg->{dir};
+		unless (defined $root and defined $dir)
+		{
+			warn "Error: internal error: config missing required fields\n";
+			exit 64;
+		}
+
+		if (&is_ignored_mount_path($mount))
+		{
+			warn "Error: subvol mount point '$mount' is under an ignored mount tree\n";
+			exit 64;
+		}
+		if (&is_ignored_mount_path($root))
+		{
+			warn "Error: volume mount point '$root' is under an ignored mount tree\n";
+			exit 64;
+		}
+
+		my $retryable = 0;
+		if (not -e -d $mount)
+		{
+			warn "Warning: subvol mount point '$mount' missing\n";
+			$retryable = 1;
+		}
+		if (not -e -d $root)
+		{
+			warn "Warning: volume mount point '$root' missing\n";
+			$retryable = 1;
+		}
+		if (not -e -d "$root/$dir")
+		{
+			warn "Warning: snapshot directory '$root/$dir' missing\n";
+			$retryable = 1;
+		}
+
+		if ($retryable)
+		{
+			$config->{$mount} = undef;
+			$rc = 2 if $rc < 2;
+		}
+	}
+
+	return $rc;
 }
 
 sub parse_mountinfo
@@ -352,11 +422,12 @@ sub mt_collect_swap_roots
 sub do_transaction
 {
 	my ($r) = @_;
+	my $rc = 0;
 
 	if (my $b = &mt_find_bind_ancestor($mount_tree, $r->{path}))
 	{
 		warn "Error: bind mount ancestor '$b' blocks remount transaction for '$r->{path}'\n";
-		return 0;
+		return 64;
 	}
 
 	my $rm = $r->{oldMount};
@@ -364,10 +435,12 @@ sub do_transaction
 	if (my $b = &tx_find_bind_descendant($r))
 	{
 		warn "Error: bind mount descendant '$b' blocks remount transaction for '$r->{path}'\n";
-		return 0;
+		return 64;
 	}
 
-	return 0 unless &tx_umount_descendants($r);
+	my $urc = &tx_umount_descendants($r);
+	$rc = $urc if $urc > $rc;
+	return $rc if $rc >= 64;
 
 	my $swap_ok = 1;
 	if (defined $rm)
@@ -380,6 +453,7 @@ sub do_transaction
 			warn "Error: remount failed for '$rm->{mount}', attempting rollback\n";
 			my $rb = &mount_btrfs($rm->{mount}, $rm->{blkdev}, $old, $rm->{options}, 0);
 			warn "Error: rollback failed for '$rm->{mount}'\n" unless $rb;
+			$rc = 64;
 		}
 	}
 	else
@@ -392,17 +466,21 @@ sub do_transaction
 		{
 			warn "Error: cannot mount '$r->{path}' because root mount '$rootMount' is not known\n";
 			$swap_ok = 0;
+			$rc = 2 if $rc < 2;
 		}
 		else
 		{
 			$swap_ok = &mount_btrfs($r->{path}, $blkdev, $r->{newSubvol}, {ro => undef}, 0);
+			$rc = 64 unless $swap_ok;
 		}
 	}
 
+	$rc = 1 if $swap_ok and $rc < 1;
 
-	&tx_restore_descendants($r);
+	my $rrc = &tx_restore_descendants($r);
+	$rc = $rrc if $rrc > $rc;
 
-	return $swap_ok;
+	return $rc;
 }
 
 sub tx_find_bind_descendant
@@ -423,21 +501,26 @@ sub tx_find_bind_descendant
 sub tx_umount_descendants
 {
 	my ($n) = @_;
+	my $rc = 0;
 
 	for my $c (values %{$n->{children}})
 	{
-		return 0 unless &tx_umount_descendants($c);
+		my $crc = &tx_umount_descendants($c);
+		$rc = $crc if $crc > $rc;
 	}
 
 	my $m = $n->{oldMount};
-	return 1 unless defined $m;
+	return $rc unless defined $m;
 
-	return &do_umount($m->{mount});
+	my $ok = &do_umount($m->{mount});
+	return 64 unless $ok;
+	return $rc;
 }
 
 sub tx_restore_descendants
 {
 	my ($n) = @_;
+	my $rc = 0;
 
 	my $m = $n->{oldMount};
 	if (defined $m)
@@ -445,29 +528,38 @@ sub tx_restore_descendants
 		unless (-e -d $m->{mount})
 		{
 			warn "Error: not restoring '$m->{mount}' because mountpoint directory is missing\n";
-			return;
+			$rc = 2 if $rc < 2;
+			goto children;
 		}
 
 		if ($m->{is_bind})
 		{
 			warn "Error: not restoring bind mount '$m->{mount}'\n";
-			return;
+			$rc = 64;
+			goto children;
 		}
 
 		if ($m->{fstype} eq 'btrfs' and defined $n->{newSubvol} and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol})
 		{
-			&mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
+			my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
+			$rc = 64 unless $ok;
 		}
 		else
 		{
-			&mount_generic($m);
+			my $ok = &mount_generic($m);
+			$rc = 64 unless $ok;
 		}
 	}
 
+	children:
+
 	for my $c (values %{$n->{children}})
 	{
-		&tx_restore_descendants($c);
+		my $crc = &tx_restore_descendants($c);
+		$rc = $crc if $crc > $rc;
 	}
+
+	return $rc;
 }
 
 sub do_umount
