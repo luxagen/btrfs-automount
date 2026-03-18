@@ -125,6 +125,7 @@ for my $mount (keys %$config)
 		my $svNew = &find_latest($rootMount, $cfg->{dir}, $cfg->{prefix});
 		warn "Warning: '$n->{path}' has no snapshots '$cfg->{dir}/$cfg->{prefix}.*'\n" unless defined $svNew;
 		$n->{newSubvol} = $svNew if defined $svNew;
+		print "Mount: '$n->{path}' -> '$rootMount/$svNew'\n" if $mode_verbose and defined $svNew;
 	}
 });
 
@@ -853,13 +854,13 @@ sub process_mount
 		my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
 		return unless   defined $svNew;
 
-		print "'$mount': $rootMount/$svNew replaces <none>\n";
+		print "Update: '$mount' -> '$rootMount/$svNew'\n";
 		return $svNew;
 	}
 
 	if (my $status = &sv_impure(&sv_info($rootMount, $sv)))
 	{
-		print "Mount [skipped - $status]: '$mount' -> $rootMount/$sv\n" if $mode_verbose;
+		print "No change: '$mount' -> $rootMount/$sv ($status)\n" if $mode_verbose;
 		return;
 	}
 
@@ -873,13 +874,13 @@ sub process_mount
 
 	my $svMounted = &sv_info($rootMount, $sv);
 
-	print "Mount [candidate]: '$mount' -> '$rootMount/$sv'\n" if $mode_verbose;
+	print "No change: '$mount' -> '$rootMount/$sv'\n" if $mode_verbose;
 
 	my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
 
 	return unless   defined $svNew  and  $svNew ne $sv;
 
-	print "'$mount': '$rootMount/$svNew' replaces '$rootMount/$sv'\n";
+	print "Update: '$mount' -> '$rootMount/$svNew'\n";
 	return $svNew;
 }
 
