@@ -71,23 +71,23 @@ while (<$h>)
 close $h;
 
 &mt_walk($mount_tree, sub {
-	my ($n) = @_;
-	my $m = $n->{oldMount};
-	return unless defined $m and $m->{fstype} eq 'btrfs';
+	my ($node) = @_;
+	my $mountInfo = $node->{oldMount};
+	return unless defined $mountInfo and $mountInfo->{fstype} eq 'btrfs';
 
-	my ($blkdev, $mount, $sv) = ($m->{blkdev}, $m->{mount}, $n->{oldSubvol});
+	my ($blockDevice, $mountPoint, $subvol) = ($mountInfo->{blkdev}, $mountInfo->{mount}, $node->{oldSubvol});
 
-	if (defined $sv)
+	if (defined $subvol)
 	{
-		return unless $sv eq '';
+		return unless $subvol eq '';
 	}
 	else
 	{
-		return unless $is_root_mount{$mount};
+		return unless $is_root_mount{$mountPoint};
 	}
 
-	$bd2root{$blkdev} = $mount;
-	$root2bd{$mount} = $blkdev;
+	$bd2root{$blockDevice} = $mountPoint;
+	$root2bd{$mountPoint} = $blockDevice;
 });
 
 for my $mount (keys %$config)
@@ -103,29 +103,29 @@ for my $mount (keys %$config)
 }
 
 &mt_walk($mount_tree, sub {
-	my ($n) = @_;
-	return unless defined $n->{cfg};
+	my ($node) = @_;
+	return unless defined $node->{cfg};
 
-	my $cfg = $n->{cfg};
-	my $m = $n->{oldMount};
+	my $configEntry = $node->{cfg};
+	my $mountInfo = $node->{oldMount};
 
-	my $rootMount = $cfg->{root};
+	my $rootMount = $configEntry->{root};
 	die unless defined $rootMount;
 
-	if (defined $m)
+	if (defined $mountInfo)
 	{
-		return unless $m->{fstype} eq 'btrfs';
+		return unless $mountInfo->{fstype} eq 'btrfs';
 
-		my ($blkdev, $mount, $sv) = ($m->{blkdev}, $m->{mount}, $n->{oldSubvol});
-		my $svNew = &process_mount($blkdev, $mount, $sv);
-		$n->{newSubvol} = $svNew if defined $svNew;
+		my ($blockDevice, $mountPoint, $subvol) = ($mountInfo->{blkdev}, $mountInfo->{mount}, $node->{oldSubvol});
+		my $subvolNew = &process_mount($blockDevice, $mountPoint, $subvol);
+		$node->{newSubvol} = $subvolNew if defined $subvolNew;
 	}
 	else
 	{
-		my $svNew = &find_latest($rootMount, $cfg->{dir}, $cfg->{prefix});
-		warn "Warning: '$n->{path}' has no snapshots '$cfg->{dir}/$cfg->{prefix}.*'\n" unless defined $svNew;
-		$n->{newSubvol} = $svNew if defined $svNew;
-		print "Mount: '$n->{path}' -> '$rootMount/$svNew'\n" if $mode_verbose and defined $svNew;
+		my $subvolNew = &find_latest($rootMount, $configEntry->{dir}, $configEntry->{prefix});
+		warn "Warning: '$node->{path}' has no snapshots '$configEntry->{dir}/$configEntry->{prefix}.*'\n" unless defined $subvolNew;
+		$node->{newSubvol} = $subvolNew if defined $subvolNew;
+		print "Mount: '$node->{path}' -> '$rootMount/$subvolNew'\n" if $mode_verbose and defined $subvolNew;
 	}
 });
 
@@ -377,49 +377,49 @@ sub mt_get_node
 
 	my @parts = grep { $_ ne '' } split(m{/+}, $path);
 
-	my $n = $root;
-	my $p = '';
+	my $node = $root;
+	my $pathSoFar = '';
 
-	if ($create and defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+	if ($create and defined $node->{oldMount} and $node->{oldMount}->{is_bind})
 	{
-		warn "Error: refusing to create node for '$path' under bind mount '$n->{path}'\n";
+		warn "Error: refusing to create node for '$path' under bind mount '$node->{path}'\n";
 		return undef;
 	}
 
 	for my $part (@parts)
 	{
-		$p .= "/$part";
-		my $c = $n->{children}->{$part};
-		unless (defined $c)
+		$pathSoFar .= "/$part";
+		my $child = $node->{children}->{$part};
+		unless (defined $child)
 		{
 			return undef unless $create;
-			$c = &mt_new($part, $p);
-			$n->{children}->{$part} = $c;
+			$child = &mt_new($part, $pathSoFar);
+			$node->{children}->{$part} = $child;
 		}
-		$n = $c;
+		$node = $child;
 
-		if ($create and defined $n->{oldMount} and $n->{oldMount}->{is_bind})
+		if ($create and defined $node->{oldMount} and $node->{oldMount}->{is_bind})
 		{
-			warn "Error: refusing to create node for '$path' under bind mount '$n->{path}'\n";
+			warn "Error: refusing to create node for '$path' under bind mount '$node->{path}'\n";
 			return undef;
 		}
 	}
 
-	return $n;
+	return $node;
 }
 
 sub mt_collect_swap_roots
 {
-	my ($n, $out) = @_;
+	my ($node, $out) = @_;
 
-	my $m = $n->{oldMount};
+	my $mountInfo = $node->{oldMount};
 
 	my $swap = 0;
-	if (defined $n->{newSubvol})
+	if (defined $node->{newSubvol})
 	{
-		if (defined $m)
+		if (defined $mountInfo)
 		{
-			$swap = 1 if $m->{fstype} eq 'btrfs' and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol};
+			$swap = 1 if $mountInfo->{fstype} eq 'btrfs' and defined $node->{oldSubvol} and $node->{newSubvol} ne $node->{oldSubvol};
 		}
 		else
 		{
@@ -429,17 +429,17 @@ sub mt_collect_swap_roots
 
 	if ($swap)
 	{
-		if (-e -d $n->{path})
+		if (-e -d $node->{path})
 		{
-			push @$out, $n;
+			push @$out, $node;
 			return;
 		}
 		return;
 	}
 
-	for my $c (values %{$n->{children}})
+	for my $child (values %{$node->{children}})
 	{
-		&mt_collect_swap_roots($c, $out);
+		&mt_collect_swap_roots($child, $out);
 	}
 }
 
@@ -725,13 +725,13 @@ sub mount_generic
 
 sub mt_walk
 {
-	my ($n, $cb) = @_;
+	my ($node, $cb) = @_;
 
-	$cb->($n);
+	$cb->($node);
 
-	for my $c (values %{$n->{children}})
+	for my $child (values %{$node->{children}})
 	{
-		&mt_walk($c, $cb);
+		&mt_walk($child, $cb);
 	}
 }
 
@@ -741,10 +741,10 @@ sub is_ignored_mount_path
 
 	return undef unless defined $path;
 
-	for my $p (@ignore_mount_prefixes)
+	for my $prefix (@ignore_mount_prefixes)
 	{
-		return 1 if $path eq $p;
-		return 1 if $path =~ /^\Q$p\E\//;
+		return 1 if $path eq $prefix;
+		return 1 if $path =~ /^\Q$prefix\E\//;
 	}
 }
 
