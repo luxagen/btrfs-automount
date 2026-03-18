@@ -725,13 +725,13 @@ sub mount_generic
 
 sub mt_walk
 {
-	my ($node, $cb) = @_;
+	my ($node, $callback) = @_;
 
-	$cb->($node);
+	$callback->($node);
 
 	for my $child (values %{$node->{children}})
 	{
-		&mt_walk($child, $cb);
+		&mt_walk($child, $callback);
 	}
 }
 
@@ -750,13 +750,13 @@ sub is_ignored_mount_path
 
 sub sv_info
 {
-	my ($rootMount, $sv) = @_;
+	my ($rootMount, $subvol) = @_;
 
 	# TODO list invocation!
-	open my $subvolShowHandle, '-|', "btrfs subvolume show '$rootMount/$sv'" or die;
+	open my $subvolShowHandle, '-|', "btrfs subvolume show '$rootMount/$subvol'" or die;
 
 	my $header = <$subvolShowHandle>;
-	die unless   defined $header  and  $header eq "$sv\n";
+	die unless   defined $header  and  $header eq "$subvol\n";
 
 	my %result = ();
 
@@ -783,28 +783,28 @@ sub sv_impure
 
 sub find_latest
 {
-	my ($rootMount, $ssdir, $ssnPrefix) = @_;
+	my ($rootMount, $snapshotDir, $snapshotNamePrefix) = @_;
 
-	die unless $ssnPrefix;
+	die unless $snapshotNamePrefix;
 
 	# See whether there's a newer snapshot
 	my $snapshotName;
-	while ($_ = glob("$rootMount/$ssdir/$ssnPrefix.*"))
+	while ($_ = glob("$rootMount/$snapshotDir/$snapshotNamePrefix.*"))
 	{
-		die unless /^\Q$rootMount\/$ssdir\/$ssnPrefix.\E(\d+(?:_\d+)?)$/;
+		die unless /^\Q$rootMount\/$snapshotDir\/$snapshotNamePrefix.\E(\d+(?:_\d+)?)$/;
 
-		my $snapshotCandidate = "$ssnPrefix.$1";
+		my $snapshotCandidate = "$snapshotNamePrefix.$1";
 
-		if (my $status = &sv_impure(&sv_info($rootMount, "$ssdir/$snapshotCandidate")))
+		if (my $status = &sv_impure(&sv_info($rootMount, "$snapshotDir/$snapshotCandidate")))
 		{
-			warn "Warning: ignoring $status subvol '$ssdir/$snapshotCandidate\n";
+			warn "Warning: ignoring $status subvol '$snapshotDir/$snapshotCandidate\n";
 			next;
 		}
 
 		$snapshotName = $snapshotCandidate if   (not defined $snapshotName)  or  $snapshotCandidate gt $snapshotName;
 	}
 
-	return "$ssdir/$snapshotName" if defined $snapshotName;
+	return "$snapshotDir/$snapshotName" if defined $snapshotName;
 }
 
 sub process_mount
@@ -852,13 +852,13 @@ sub process_mount
 
 		return unless defined $configEntry;
 
-		my ($ssdir, $ssPrefix) = ($configEntry->{dir}, $configEntry->{prefix});
+		my ($snapshotDir, $snapshotPrefix) = ($configEntry->{dir}, $configEntry->{prefix});
 
-		my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
-		return unless   defined $svNew;
+		my $subvolNew = &find_latest($rootMount, $snapshotDir, $snapshotPrefix);
+		return unless   defined $subvolNew;
 
-		print "Update: '$mountPoint' -> '$rootMount/$svNew'\n";
-		return $svNew;
+		print "Update: '$mountPoint' -> '$rootMount/$subvolNew'\n";
+		return $subvolNew;
 	}
 
 	if (my $status = &sv_impure(&sv_info($rootMount, $subvol)))
@@ -869,22 +869,22 @@ sub process_mount
 
 	# Snapshots live at least one directory deep
 	return unless $subvol =~ /^(.+)\/([^,\)]+)/;
-	my ($ssdir, $ssnCurr) = ($1, $2);
+	my ($snapshotDir, $snapshotNameCurrent) = ($1, $2);
 
 	# Snapshots are named <prefix> . <number>
-	return unless $ssnCurr =~ /^(.+)\.\d+(?:_\d+)?/;
-	my $ssPrefix = $1;
+	return unless $snapshotNameCurrent =~ /^(.+)\.\d+(?:_\d+)?/;
+	my $snapshotPrefix = $1;
 
 	my $subvolInfoMounted = &sv_info($rootMount, $subvol);
 
 	print "No change: '$mountPoint' -> '$rootMount/$subvol'\n" if $mode_verbose;
 
-	my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
+	my $subvolNew = &find_latest($rootMount, $snapshotDir, $snapshotPrefix);
 
-	return unless   defined $svNew  and  $svNew ne $subvol;
+	return unless   defined $subvolNew  and  $subvolNew ne $subvol;
 
-	print "Update: '$mountPoint' -> '$rootMount/$svNew'\n";
-	return $svNew;
+	print "Update: '$mountPoint' -> '$rootMount/$subvolNew'\n";
+	return $subvolNew;
 }
 
 sub mount
