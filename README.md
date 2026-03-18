@@ -89,9 +89,5 @@ The overall exit code is the maximum-severity value observed during a run (even 
 The following pattern reruns `btram` only when it exits with code `2` (retryable blocked):
 
 ```bash
-while true; do
-  btram -r
-  rc=$?
-  [ $rc -eq 2 ] || exit $rc
-  sleep 1
-done
+while :; do btram -r; [ $? -eq 2 ] || break; done
+```
