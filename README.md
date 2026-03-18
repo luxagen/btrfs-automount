@@ -62,3 +62,36 @@ btram -h
 ```
 
 ...will tell you how to use the tool. Note that it won't actually do any [re]mounting unless you invoke it with the ```-r``` option. A ```--verbose``` option exists that will print more diagnostic information, including the commands that `btram -r` will run.
+
+## Exit codes
+
+This section documents the *planned* (proposed) exit code scheme for `btram`, intended to allow safe external iteration (e.g. a `bash` `while` loop) and better diagnostics.
+
+The overall exit code is the maximum-severity value observed during a run (even though `btram` may continue attempting other roots after encountering an error).
+
+| Code | Meaning |
+| ---: | --- |
+| 0 | No changes required (nothing to do), and no retryable blockers detected |
+| 1 | Would perform changes (dry-run) / performed at least one change (run) |
+| 2 | Retryable blocked: a condition that may succeed on a subsequent invocation |
+| 65 (`EX_DATAERR`) | Config line malformed or missing required fields |
+| 66 (`EX_NOINPUT`) | Missing/inaccessible `/etc/btram.conf` |
+| 70 (`EX_SOFTWARE`) | Internal error / invariant violation |
+| 78 (`EX_CONFIG`) | Configuration violates policy (e.g. mountpoints under ignored mount trees) |
+| 80 (`BTRAM_BIND_BLOCK`) | Transaction blocked due to a bind mount (ancestor or descendant) |
+| 81 (`BTRAM_UMOUNT_FAILED`) | `umount` failed during a transaction |
+| 82 (`BTRAM_MOUNT_FAILED`) | `mount`/remount failed for a root swap or config-driven mount |
+| 83 (`BTRAM_RESTORE_FAILED`) | Restoring descendant mounts failed |
+| 84 (`BTRAM_ROLLBACK_FAILED`) | Rollback failed after a swap failure |
+
+### Example: external convergence loop
+
+The following pattern reruns `btram` only when it exits with code `2` (retryable blocked):
+
+```bash
+while true; do
+  btram -r
+  rc=$?
+  [ $rc -eq 2 ] || exit $rc
+  sleep 1
+done

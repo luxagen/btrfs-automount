@@ -6,7 +6,22 @@ use warnings;
 
 use Getopt::Lucid qw( :all );
 use IPC::Run qw(run);
+use File::Spec;
 use List::Util qw(max);
+
+use constant
+{
+	EX_DATAERR  => 65,
+	EX_NOINPUT  => 66,
+	EX_SOFTWARE => 70,
+	EX_CONFIG   => 78,
+
+	BTRAM_BIND_BLOCK     => 80,
+	BTRAM_UMOUNT_FAILED  => 81,
+	BTRAM_MOUNT_FAILED   => 82,
+	BTRAM_RESTORE_FAILED => 83,
+	BTRAM_ROLLBACK_FAILED=> 84,
+};
 
 my @options_spec = (
 	Switch(    '--run|-r')->doc('Actually perform [re]mount operations' ),
@@ -151,7 +166,7 @@ sub get_config_raw
 
 	my %result;
 
-	open my $h, '<', $file or do { warn "Missing/inaccessible config; nothing to do\n"; exit 64; };
+	open my $h, '<', $file or do { warn "Missing/inaccessible config; nothing to do\n"; exit EX_NOINPUT; };
 
 	while (<$h>)
 	{
@@ -162,12 +177,12 @@ sub get_config_raw
 		unless (/^([^\t]+)\t+([^\t]+)\t+([^\t]+)\t+([^\t]+)\n$/)
 		{
 			warn "Error: config line is malformed\n";
-			exit 64;
+			exit EX_DATAERR;
 		}
 		unless ($1 and $2 and $3 and $4)
 		{
 			warn "Error: config line is missing field(s)\n";
-			exit 64;
+			exit EX_DATAERR;
 		}
 
 		$result{$1}->{root  } = $2;
@@ -184,7 +199,7 @@ sub validate_config
 {
 	my ($config) = @_;
 
-	return 64 unless defined $config;
+	return EX_SOFTWARE unless defined $config;
 
 	my $rc = 0;
 
@@ -198,18 +213,18 @@ sub validate_config
 		unless (defined $root and defined $dir)
 		{
 			warn "Error: internal error: config missing required fields\n";
-			exit 64;
+			exit EX_SOFTWARE;
 		}
 
 		if (&is_ignored_mount_path($mount))
 		{
 			warn "Error: subvol mount point '$mount' is under an ignored mount tree\n";
-			exit 64;
+			exit EX_CONFIG;
 		}
 		if (&is_ignored_mount_path($root))
 		{
 			warn "Error: volume mount point '$root' is under an ignored mount tree\n";
-			exit 64;
+			exit EX_CONFIG;
 		}
 
 		my $retryable = 0;
@@ -427,7 +442,7 @@ sub do_transaction
 	if (my $b = &mt_find_bind_ancestor($mount_tree, $r->{path}))
 	{
 		warn "Error: bind mount ancestor '$b' blocks remount transaction for '$r->{path}'\n";
-		return 64;
+		return BTRAM_BIND_BLOCK;
 	}
 
 	my $rm = $r->{oldMount};
@@ -435,7 +450,7 @@ sub do_transaction
 	if (my $b = &tx_find_bind_descendant($r))
 	{
 		warn "Error: bind mount descendant '$b' blocks remount transaction for '$r->{path}'\n";
-		return 64;
+		return BTRAM_BIND_BLOCK;
 	}
 
 	$rc = max($rc, &tx_umount_descendants($r));
@@ -452,7 +467,8 @@ sub do_transaction
 			warn "Error: remount failed for '$rm->{mount}', attempting rollback\n";
 			my $rb = &mount_btrfs($rm->{mount}, $rm->{blkdev}, $old, $rm->{options}, 0);
 			warn "Error: rollback failed for '$rm->{mount}'\n" unless $rb;
-			$rc = 64;
+			$rc = max($rc, BTRAM_MOUNT_FAILED);
+			$rc = max($rc, BTRAM_ROLLBACK_FAILED) unless $rb;
 		}
 	}
 	else
@@ -470,7 +486,7 @@ sub do_transaction
 		else
 		{
 			$swap_ok = &mount_btrfs($r->{path}, $blkdev, $r->{newSubvol}, {ro => undef}, 0);
-			$rc = 64 unless $swap_ok;
+			$rc = max($rc, BTRAM_MOUNT_FAILED) unless $swap_ok;
 		}
 	}
 
@@ -507,7 +523,7 @@ sub tx_umount_descendants
 	return $rc unless defined $m;
 
 	my $ok = &do_umount($m->{mount});
-	return $ok ? $rc : 64;
+	return $ok ? $rc : max($rc, BTRAM_UMOUNT_FAILED);
 }
 
 sub tx_restore_descendants
@@ -528,19 +544,19 @@ sub tx_restore_descendants
 		if ($m->{is_bind})
 		{
 			warn "Error: not restoring bind mount '$m->{mount}'\n";
-			$rc = 64;
+			$rc = max($rc, BTRAM_BIND_BLOCK);
 			goto children;
 		}
 
 		if ($m->{fstype} eq 'btrfs' and defined $n->{newSubvol} and defined $n->{oldSubvol} and $n->{newSubvol} ne $n->{oldSubvol})
 		{
 			my $ok = &mount_btrfs($m->{mount}, $m->{blkdev}, $n->{newSubvol}, $m->{options}, 0);
-			$rc = 64 unless $ok;
+			$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
 		}
 		else
 		{
 			my $ok = &mount_generic($m);
-			$rc = 64 unless $ok;
+			$rc = max($rc, BTRAM_RESTORE_FAILED) unless $ok;
 		}
 	}
 
