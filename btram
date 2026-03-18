@@ -809,108 +809,108 @@ sub find_latest
 
 sub process_mount
 {
-	my ($blkdev, $mount, $sv) = @_;
+	my ($blockDevice, $mountPoint, $subvol) = @_;
 
-	die unless defined $blkdev and defined $mount;
+	die unless defined $blockDevice and defined $mountPoint;
 
-	if (not defined $sv and $is_root_mount{$mount})
+	if (not defined $subvol and $is_root_mount{$mountPoint})
 	{
-		$bd2root{$blkdev} = $mount;
-		$root2bd{$mount} = $blkdev;
+		$bd2root{$blockDevice} = $mountPoint;
+		$root2bd{$mountPoint} = $blockDevice;
 		return;
 	}
 
-	if (defined $sv)
+	if (defined $subvol)
 	{
 		# Special handling for root-subvol mounts
-		if ($sv eq '')
+		if ($subvol eq '')
 		{
-			$bd2root{$blkdev} = $mount;
-			$root2bd{$mount} = $blkdev;
+			$bd2root{$blockDevice} = $mountPoint;
+			$root2bd{$mountPoint} = $blockDevice;
 			return;
 		}
 
-		$sv =~ s{^/}{};
+		$subvol =~ s{^/}{};
 	}
 
 	# We must have previously processed the root-subvol mount line for this block device (TODO make order-independent)
-	my $rootMount = $bd2root{$blkdev};
+	my $rootMount = $bd2root{$blockDevice};
 	unless (defined $rootMount)
 	{
-		warn "Warning: $blkdev has a subvol at '$mount', but its root subvol is not mounted\n";
+		warn "Warning: $blockDevice has a subvol at '$mountPoint', but its root subvol is not mounted\n";
 		return;
 	}
 
-	my $cfg = $config->{$mount};
-	$cfg->{done} = 1;
+	my $configEntry = $config->{$mountPoint};
+	$configEntry->{done} = 1 if defined $configEntry;
 
-	warn "Warning: mount '$mount' is not mentioned in config\n" unless defined $cfg;
+	warn "Warning: mount '$mountPoint' is not mentioned in config\n" unless defined $configEntry;
 
-	unless (defined $sv)
+	unless (defined $subvol)
 	{
-		warn "Warning: mount '$mount' has no subvol; was it deleted?\n";
+		warn "Warning: mount '$mountPoint' has no subvol; was it deleted?\n";
 
-		return unless defined $cfg;
+		return unless defined $configEntry;
 
-		my ($ssdir, $ssPrefix) = ($cfg->{dir}, $cfg->{prefix});
+		my ($ssdir, $ssPrefix) = ($configEntry->{dir}, $configEntry->{prefix});
 
 		my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
 		return unless   defined $svNew;
 
-		print "Update: '$mount' -> '$rootMount/$svNew'\n";
+		print "Update: '$mountPoint' -> '$rootMount/$svNew'\n";
 		return $svNew;
 	}
 
-	if (my $status = &sv_impure(&sv_info($rootMount, $sv)))
+	if (my $status = &sv_impure(&sv_info($rootMount, $subvol)))
 	{
-		print "No change: '$mount' -> $rootMount/$sv ($status)\n" if $mode_verbose;
+		print "No change: '$mountPoint' -> $rootMount/$subvol ($status)\n" if $mode_verbose;
 		return;
 	}
 
 	# Snapshots live at least one directory deep
-	return unless $sv =~ /^(.+)\/([^,\)]+)/;
+	return unless $subvol =~ /^(.+)\/([^,\)]+)/;
 	my ($ssdir, $ssnCurr) = ($1, $2);
 
 	# Snapshots are named <prefix> . <number>
 	return unless $ssnCurr =~ /^(.+)\.\d+(?:_\d+)?/;
 	my $ssPrefix = $1;
 
-	my $svMounted = &sv_info($rootMount, $sv);
+	my $svMounted = &sv_info($rootMount, $subvol);
 
-	print "No change: '$mount' -> '$rootMount/$sv'\n" if $mode_verbose;
+	print "No change: '$mountPoint' -> '$rootMount/$subvol'\n" if $mode_verbose;
 
 	my $svNew = &find_latest($rootMount, $ssdir, $ssPrefix);
 
-	return unless   defined $svNew  and  $svNew ne $sv;
+	return unless   defined $svNew  and  $svNew ne $subvol;
 
-	print "Update: '$mount' -> '$rootMount/$svNew'\n";
+	print "Update: '$mountPoint' -> '$rootMount/$svNew'\n";
 	return $svNew;
 }
 
 sub mount
 {
-	my ($mount, $blkdev, $sv, $remount) = @_;
+	my ($mountPoint, $blockDevice, $subvol, $remount) = @_;
 
-	my @uc = ('umount', $mount );
-	my @mc = ( 'mount', '-o', "ro,subvol=$sv", $blkdev, $mount );
+	my @cmdUmount = ('umount', $mountPoint );
+	my @cmdMount = ( 'mount', '-o', "ro,subvol=$subvol", $blockDevice, $mountPoint );
 
 	if ($mode_verbose)
 	{
-		warn "> @uc\n" if  $mode_verbose and $remount;
-		warn "> @mc\n" if  $mode_verbose;
+		warn "> @cmdUmount\n" if  $mode_verbose and $remount;
+		warn "> @cmdMount\n" if  $mode_verbose;
 	}
 
 	return undef unless $mode_run;
 
-	if ($remount and system(@uc))
+	if ($remount and system(@cmdUmount))
 	{
-		warn "Couldn't unmount '$mount'\n";
+		warn "Couldn't unmount '$mountPoint'\n";
 		return 0;
 	}
 
-	if (system(@mc))
+	if (system(@cmdMount))
 	{
-		warn "Couldn't mount '$mount'!\n";
+		warn "Couldn't mount '$mountPoint'!\n";
 		return 0;
 	}
 
