@@ -124,8 +124,7 @@ else
 {
 	for my $r (@swap_roots)
 	{
-		my $trc = &do_transaction($r);
-		$rc = max($rc, $trc);
+		$rc = max($rc, &do_transaction($r));
 	}
 }
 
@@ -439,8 +438,7 @@ sub do_transaction
 		return 64;
 	}
 
-	my $urc = &tx_umount_descendants($r);
-	$rc = max($rc, $urc);
+	$rc = max($rc, &tx_umount_descendants($r));
 	return $rc if $rc >= 64;
 
 	my $swap_ok = 1;
@@ -478,8 +476,7 @@ sub do_transaction
 
 	$rc = max($rc, 1) if $swap_ok;
 
-	my $rrc = &tx_restore_descendants($r);
-	$rc = max($rc, $rrc);
+	$rc = max($rc, &tx_restore_descendants($r));
 
 	return $rc;
 }
@@ -503,8 +500,7 @@ sub tx_umount_descendants
 
 	for my $c (values %{$n->{children}})
 	{
-		my $crc = &tx_umount_descendants($c);
-		$rc = max($rc, $crc);
+		$rc = max($rc, &tx_umount_descendants($c));
 	}
 
 	my $m = $n->{oldMount};
@@ -552,8 +548,7 @@ sub tx_restore_descendants
 
 	for my $c (values %{$n->{children}})
 	{
-		my $crc = &tx_restore_descendants($c);
-		$rc = max($rc, $crc);
+		$rc = max($rc, &tx_restore_descendants($c));
 	}
 
 	return $rc;
