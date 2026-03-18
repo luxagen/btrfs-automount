@@ -138,9 +138,9 @@ if (not $mode_run)
 }
 else
 {
-	for my $r (@swap_roots)
+	for my $nodeTXRoot (@swap_roots)
 	{
-		$rc = max($rc, &do_transaction($r));
+		$rc = max($rc, &do_transaction($nodeTXRoot));
 	}
 }
 
